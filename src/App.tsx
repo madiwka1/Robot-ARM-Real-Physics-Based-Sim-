@@ -1,9 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AuthModal } from './components/AuthModal';
 import { BottomTimelinePanel } from './components/BottomTimelinePanel';
+import { FeedbackModal } from './components/FeedbackModal';
 import { HardwareBridgeModal } from './components/HardwareBridgeModal';
+import { LandingPage } from './components/LandingPage';
 import { LeftSidebar } from './components/LeftSidebar';
+import { ProfileModal } from './components/ProfileModal';
 import { RightSidebar } from './components/RightSidebar';
 import { TopToolbar } from './components/TopToolbar';
+import {
+  getProfile,
+  getSession,
+  signOutUser,
+  type UserProfile,
+  type UserSession,
+} from './data/platformStore';
 import { ensureRapierInitialized, RoboticsPhysicsWorld } from './physics/rapierWorld';
 import { WebSocketRobotBridge } from './robotics/bridge';
 import {
@@ -64,17 +75,38 @@ function downloadTextFile(filename: string, content: string, mimeType: string) {
 }
 
 export default function App() {
-  // Physics world lifecycle
+  // Product navigation & user account state
+  const [appView, setAppView] = useState<'landing' | 'simulator'>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('autostart') === '1') return 'simulator';
+    }
+    return 'landing';
+  });
+
+  const [session, setSession] = useState<UserSession | null>(() => getSession());
+  const [profile, setProfile] = useState<UserProfile | null>(() => {
+    const s = getSession();
+    return s ? getProfile(s.userId) : null;
+  });
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
+
+  // Physics world lifecycle (only booted when entering the 3D simulator)
   const physicsRef = useRef<RoboticsPhysicsWorld | null>(null);
   const [physicsReady, setPhysicsReady] = useState(false);
 
   useEffect(() => {
+    if (appView !== 'simulator') return;
     let cancelled = false;
     ensureRapierInitialized().then(() => {
       if (cancelled) return;
-      const world = new RoboticsPhysicsWorld(DEFAULT_SCENE_OBJECTS);
-      physicsRef.current = world;
-      setObjectStates(world.getObjectStates());
+      if (!physicsRef.current) {
+        const world = new RoboticsPhysicsWorld(DEFAULT_SCENE_OBJECTS);
+        physicsRef.current = world;
+        setObjectStates(world.getObjectStates());
+      }
       setPhysicsReady(true);
     });
     return () => {
@@ -82,9 +114,10 @@ export default function App() {
       if (physicsRef.current) {
         physicsRef.current.dispose();
         physicsRef.current = null;
+        setPhysicsReady(false);
       }
     };
-  }, []);
+  }, [appView]);
 
   // Robot state
   const [jointAnglesDeg, setJointAnglesDeg] = useState<JointTuple>(
@@ -97,7 +130,9 @@ export default function App() {
     [],
   );
 
-  const [controlMode, setControlMode] = useState<ControlMode>('joint');
+  const [controlMode, setControlMode] = useState<ControlMode>(
+    () => profile?.defaultControlMode ?? 'joint',
+  );
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>('translate');
 
   const [ikTargetPos, setIkTargetPos] = useState<Vec3Tuple>(initialFk.tcpPosition);
@@ -118,7 +153,9 @@ export default function App() {
   // Scene & UI overlays
   const [simulationRunning, setSimulationRunning] = useState(true);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>('TCP');
-  const [showJointAxes, setShowJointAxes] = useState(true);
+  const [showJointAxes, setShowJointAxes] = useState(
+    () => profile?.showJointAxesDefault ?? true,
+  );
   const [showWorkspace, setShowWorkspace] = useState(false);
   const [showGrid, setShowGrid] = useState(true);
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>('perspective');
@@ -880,6 +917,63 @@ export default function App() {
     );
   }, [gripper.graspedObjectId]);
 
+  const handleAuthSuccess = useCallback(
+    (nextSession: UserSession, nextProfile: UserProfile) => {
+      setSession(nextSession);
+      setProfile(nextProfile);
+      setControlMode(nextProfile.defaultControlMode);
+      setShowJointAxes(nextProfile.showJointAxesDefault);
+    },
+    [],
+  );
+
+  const handleProfileSaved = useCallback((updated: UserProfile) => {
+    setProfile(updated);
+    setControlMode(updated.defaultControlMode);
+    setShowJointAxes(updated.showJointAxesDefault);
+  }, []);
+
+  const handleSignOut = useCallback(() => {
+    signOutUser();
+    setSession(null);
+    setProfile(null);
+  }, []);
+
+  if (appView === 'landing') {
+    return (
+      <>
+        <LandingPage
+          session={session}
+          profile={profile}
+          onEnterSimulator={() => setAppView('simulator')}
+          onAuthSuccess={handleAuthSuccess}
+          onSignOut={handleSignOut}
+          onOpenProfileModal={() => setProfileModalOpen(true)}
+          onOpenFeedbackModal={() => setFeedbackModalOpen(true)}
+        />
+        <AuthModal
+          open={authModalOpen}
+          onClose={() => setAuthModalOpen(false)}
+          onAuthSuccess={handleAuthSuccess}
+        />
+        <ProfileModal
+          open={profileModalOpen}
+          profile={profile}
+          onClose={() => setProfileModalOpen(false)}
+          onProfileSaved={handleProfileSaved}
+          onSignOut={handleSignOut}
+        />
+        <FeedbackModal
+          open={feedbackModalOpen}
+          userId={session?.userId ?? null}
+          userEmail={session?.email ?? ''}
+          appView="landing"
+          onClose={() => setFeedbackModalOpen(false)}
+        />
+      </>
+    );
+  }
+
   return (
     <div
       className="flex h-screen w-screen flex-col overflow-hidden bg-[#0d1015] text-[#e6eaf0]"
@@ -897,6 +991,11 @@ export default function App() {
         powerWatts={latestTelemetry.totalPowerWatts}
         busCurrentAmps={latestTelemetry.busCurrentAmps}
         peakLoadPct={latestTelemetry.peakJointLoadPct}
+        profile={profile}
+        onReturnToLanding={() => {
+          setIsPlayingDemo(false);
+          setAppView('landing');
+        }}
         onToggleSimulation={() => setSimulationRunning((v) => !v)}
         onResetLab={handleResetLab}
         onToggleRecord={handleToggleRecord}
@@ -906,6 +1005,10 @@ export default function App() {
         onExportJSON={handleExportJSON}
         onExportCSV={handleExportCSV}
         onOpenBridgeModal={() => setBridgeModalOpen(true)}
+        onOpenFeedbackModal={() => setFeedbackModalOpen(true)}
+        onOpenProfileOrAuth={() =>
+          profile ? setProfileModalOpen(true) : setAuthModalOpen(true)
+        }
       />
 
       <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -1018,6 +1121,28 @@ export default function App() {
         onClose={() => setBridgeModalOpen(false)}
         onConnect={handleConnectBridge}
         onDisconnect={handleDisconnectBridge}
+      />
+
+      <AuthModal
+        open={authModalOpen}
+        onClose={() => setAuthModalOpen(false)}
+        onAuthSuccess={handleAuthSuccess}
+      />
+
+      <ProfileModal
+        open={profileModalOpen}
+        profile={profile}
+        onClose={() => setProfileModalOpen(false)}
+        onProfileSaved={handleProfileSaved}
+        onSignOut={handleSignOut}
+      />
+
+      <FeedbackModal
+        open={feedbackModalOpen}
+        userId={session?.userId ?? null}
+        userEmail={session?.email ?? ''}
+        appView="simulator"
+        onClose={() => setFeedbackModalOpen(false)}
       />
     </div>
   );
