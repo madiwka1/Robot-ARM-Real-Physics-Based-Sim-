@@ -25,7 +25,7 @@
 ---
 
 > [!NOTE]
-> **Documentation Scope & Verification Guarantee**: Every module name, kinematic parameter, physics rule, schema field, UI control, and capability status in this document has been verified directly against the repository source code (`src/robotics/`, `src/physics/`, `src/scene/`, `src/components/`, `src/data/`, `supabase/`). Features that are planned or partially wired (such as policy learning, remote demonstration synchronization, and closed-loop hardware feedback) are explicitly labeled as such. Repository-level GitHub statistics and CI badges are intentionally omitted because no remote Git origin or `.github/workflows` pipeline is present in this workspace.
+> **Documentation Scope & Verification Guarantee**: Every module name, kinematic parameter, physics rule, schema field, UI control, and capability status in this document has been verified directly against the repository source code (`src/robotics/`, `src/physics/`, `src/scene/`, `src/components/`, `src/data/`). Features that are planned or partially wired (such as policy learning, remote demonstration synchronization, and closed-loop hardware feedback) are explicitly labeled as such. Repository-level GitHub statistics and CI badges are intentionally omitted because no remote Git origin or `.github/workflows` pipeline is present in this workspace.
 
 ---
 
@@ -67,7 +67,7 @@
 
 ## 1. Abstract
 
-**AxisLab 6** is an interactive, browser-native 6-degree-of-freedom (6-DOF) robotic manipulation playground designed for kinematic experimentation, rigid-body pick-and-place interaction, dynamic release tasks, and structured human demonstration capture. Built on React Three Fiber, Three.js, and WebAssembly-compiled Rapier3D physics, AxisLab 6 eliminates local simulator installation overhead while preserving real-time numerical forward kinematics (FK), 6-DOF Damped Least-Squares (Levenberg–Marquardt) inverse kinematics (IK), parallel-jaw gripper state management, joint-level electromechanical telemetry estimation, and structured JSON/CSV demonstration export (`axislab.demonstration.v1`). In addition to client-side teleoperation and trajectory editing, the architecture decouples robot kinematics from transport via a WebSocket / ROS 2 `rosbridge_suite` adapter and integrates optional Supabase persistence for public user onboarding, operator preferences, and feedback.
+**AxisLab 6** is an interactive, browser-native 6-degree-of-freedom (6-DOF) robotic manipulation playground designed for kinematic experimentation, rigid-body pick-and-place interaction, dynamic release tasks, and structured human demonstration capture. Built on React Three Fiber, Three.js, and WebAssembly-compiled Rapier3D physics, AxisLab 6 eliminates local simulator installation overhead while preserving real-time numerical forward kinematics (FK), 6-DOF Damped Least-Squares (Levenberg–Marquardt) inverse kinematics (IK), parallel-jaw gripper state management, joint-level electromechanical telemetry estimation, and structured JSON/CSV demonstration export (`axislab.demonstration.v1`). In addition to client-side teleoperation and trajectory editing, the architecture decouples robot kinematics from transport via a WebSocket / ROS 2 `rosbridge_suite` adapter and includes browser-local persistence for demonstrations, operator preferences, and feedback.
 
 ---
 
@@ -89,7 +89,7 @@ AxisLab 6 addresses these needs as a lightweight, zero-install manipulation work
 
 AxisLab 6 separates its runtime into two complementary surfaces inside a single TypeScript application (`src/App.tsx`):
 
-1. **Research Portal & Onboarding (`src/components/LandingPage.tsx`)**: A scrollable overview presenting simulator specifications, high-resolution workbench imagery, feedback collection, profile customization, and passwordless public email registration backed by `@supabase/supabase-js` (`src/data/platformStore.ts`).
+1. **Research Portal & Onboarding (`src/components/LandingPage.tsx`)**: A scrollable overview presenting simulator specifications, high-resolution workbench imagery, feedback collection, profile customization, and public email registration (`src/data/platformStore.ts`).
 2. **Interactive 3D Robotics Laboratory (`appView === 'simulator'`, or direct launch via `?autostart=1`)**:
    - **Top Toolbar (`TopToolbar.tsx`)**: Simulation run/pause, lab reset, record toggle, demonstration playback, JSON/CSV export, real-time `48 V` system power & current readout, ROS 2 hardware bridge modal, feedback, and user profile switcher.
    - **Left Sidebar (`LeftSidebar.tsx`)**: Articulated hierarchy (`BASE`, `J1`–`J6`, `TCP`), interactive workbench object inspector with one-click IK hover alignment (`Align Gripper Above (IK)`), viewport overlays (joint axes triads, `0.92 m` spherical workspace envelope, optical breadboard grid), and camera presets (`perspective`, `top`, `front`, `side`).
@@ -125,9 +125,8 @@ flowchart TB
         RAP["rapierWorld.ts (Rapier3D 0.14 WASM World)"]
     end
 
-    subgraph Storage["Persistence & Auth Layer"]
-        LSDB["Browser localStorage (Demonstrations, Session Fallback)"]
-        SB["Supabase (@supabase/supabase-js: Auth OTP, Profiles, Feedback, Registrations)"]
+    subgraph Storage["Client-Side Persistence Layer"]
+        LSDB["Browser localStorage (Demonstrations, Profiles, Feedback, Registrations)"]
     end
 
     UI -->|"Joint / IK / Gripper Commands"| AppState["App.tsx Orchestrator"]
@@ -139,8 +138,7 @@ flowchart TB
     AppState --> RAP
     AppState --> BR
     DS --> LSDB
-    UI --> SB
-    SB -.->|"Offline / Rate-Limit Fallback"| LSDB
+    UI --> LSDB
 ```
 
 ---
@@ -220,17 +218,15 @@ flowchart LR
 
 ```text
 .
-├── .env.example                       # Environment template (GEMINI_API_KEY, APP_URL, VITE_SUPABASE_*)
+├── .env.example                       # Optional environment template (GEMINI_API_KEY, APP_URL)
 ├── index.html                         # Root SPA HTML (Plus Jakarta Sans & IBM Plex Mono fonts, metadata)
 ├── metadata.json                      # Application manifest ("AxisLab 6-DOF Robotics Simulator")
-├── package.json                       # Vite + React 19 + Three.js + Rapier3D + Supabase dependencies
+├── package.json                       # Vite + React 19 + Three.js + Rapier3D dependencies
 ├── tsconfig.json                      # TypeScript compiler configuration (ES2022, bundler resolution)
 ├── vite.config.ts                     # Vite build config + src/assets copy plugin
 ├── public/
 │   └── media/
 │       └── axislab-simulator-preview.png  # 1600x900 live workbench screenshot
-├── supabase/
-│   └── schema.sql                     # PostgreSQL tables & RLS policies (email_registrations, profiles, feedback, demonstrations)
 └── src/
     ├── App.tsx                        # Top-level router (landing vs simulator), physics lifecycle, recording/playback loop
     ├── main.tsx                       # React DOM entry point
@@ -255,10 +251,8 @@ flowchart LR
     │   ├── RobotArmMesh.tsx           # Procedural PBR 6-DOF manipulator geometry, workspace sphere, RGB XYZ axis triads
     │   ├── LabEnvironment.tsx         # PMREM StudioEnvironmentRig, optical breadboard texture, contact shadows, prop meshes
     │   └── materials.ts               # Software WebGL detector, procedural breadboard canvas textures, PBR material presets
-    ├── lib/
-    │   └── supabaseClient.ts          # Singleton Supabase client with /rest/v1 origin normalization
     ├── data/
-    │   ├── platformStore.ts           # Email OTP registration, public email log, profile & feedback stores (Supabase + local fallback)
+    │   ├── platformStore.ts           # Public email registration, profile preferences & feedback persistence
     │   └── platformStore.test.ts      # Unit tests for email/display-name validation, profiles, feedback, deduplication
     └── components/
         ├── LandingPage.tsx            # Scrollable landing showcase, metrics, preview, capabilities, registration
@@ -420,21 +414,9 @@ cd <repository-directory>
 npm install
 ```
 
-### Environment Configuration (Optional Supabase Integration)
+### Environment & Local Persistence
 
-The simulator runs **100% client-side with zero environment variables required**. To enable remote public email registration, passwordless OTP authentication, profile sync, and feedback logging:
-
-1. Copy `.env.example` to `.env`:
-   ```bash
-   cp .env.example .env
-   ```
-2. Populate your Supabase project credentials (see `.env.example`):
-   ```env
-   VITE_SUPABASE_URL="https://<your-project-ref>.supabase.co"
-   VITE_SUPABASE_ANON_KEY="<your-supabase-anon-key>"
-   ```
-   > Note: `src/lib/supabaseClient.ts` normalizes `VITE_SUPABASE_URL` via `new URL(rawUrl).origin`, so root URLs and `/rest/v1` URLs both resolve correctly.
-3. Execute `supabase/schema.sql` inside your Supabase SQL Editor to create `public.email_registrations`, `public.profiles`, `public.feedback`, `public.demonstrations`, triggers, and Row-Level Security (RLS) policies.
+The simulator runs **100% client-side in the browser with zero required environment variables**. Recorded demonstrations, operator profiles, registrations, and feedback are persisted automatically in browser `localStorage` across sessions.
 
 ### Running & Building
 
@@ -633,7 +615,7 @@ The following research and engineering milestones outline the planned evolution 
 - [ ] **Simulated RGB-D Wrist & Third-Person Cameras**: Render offscreen WebGL camera observation buffers (`observation.images.*`) into demonstrations for visuomotor policies.
 - [ ] **In-Browser Policy Inference & Behavioral Cloning (ONNX / WebGPU)**: Run trained ACT, Diffusion Policy, or LeRobot policies directly inside the simulation loop alongside external Python training scripts.
 - [ ] **Vision–Language–Action (VLA) & RL Task Benchmarks**: Standardized success evaluators, randomized domain initialization, and reward logging for pick-and-place and bottle-flipping tasks.
-- [ ] **Cloud Demonstration Sync (`public.demonstrations`)**: Wire `supabase/schema.sql`'s existing `demonstrations` table to `dataset.ts` so recorded episodes sync seamlessly across devices.
+- [ ] **Remote Demonstration Dataset Sync**: Synchronize `axislab.demonstration.v1` episodes from `dataset.ts` to shared team storage across devices.
 - [ ] **Bidirectional ROS 2 (`ros2_control` / MoveIt 2) & Real Hardware Validation**: Stream closed-loop `/joint_states` back into the digital twin viewport and validate trajectory playback on physical 6-DOF hardware.
 
 ---
