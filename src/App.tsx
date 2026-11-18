@@ -11,7 +11,9 @@ import { TopToolbar } from './components/TopToolbar';
 import {
   getProfile,
   getSession,
+  hydrateSupabaseSession,
   signOutUser,
+  subscribeToSupabaseAuth,
   type UserProfile,
   type UserSession,
 } from './data/platformStore';
@@ -75,15 +77,7 @@ function downloadTextFile(filename: string, content: string, mimeType: string) {
 }
 
 export default function App() {
-  // Product navigation & user account state
-  const [appView, setAppView] = useState<'landing' | 'simulator'>(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('autostart') === '1') return 'simulator';
-    }
-    return 'landing';
-  });
-
+  // User account & Supabase session state
   const [session, setSession] = useState<UserSession | null>(() => getSession());
   const [profile, setProfile] = useState<UserProfile | null>(() => {
     const s = getSession();
@@ -93,12 +87,44 @@ export default function App() {
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
 
-  // Physics world lifecycle (only booted when entering the 3D simulator)
+  // Hydrate live Supabase Auth session (if configured) and support ?autostart=1 scroll anchor
+  useEffect(() => {
+    let active = true;
+    hydrateSupabaseSession().then((hydrated) => {
+      if (!active || !hydrated) return;
+      setSession(hydrated.session);
+      setProfile(hydrated.profile);
+      setControlMode(hydrated.profile.defaultControlMode);
+      setShowJointAxes(hydrated.profile.showJointAxesDefault);
+    });
+    const unsubscribe = subscribeToSupabaseAuth((payload) => {
+      if (!active || !payload) return;
+      setSession(payload.session);
+      setProfile(payload.profile);
+      setControlMode(payload.profile.defaultControlMode);
+      setShowJointAxes(payload.profile.showJointAxesDefault);
+    });
+
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('autostart') === '1') {
+        requestAnimationFrame(() => {
+          document.getElementById('simulator')?.scrollIntoView({ behavior: 'auto' });
+        });
+      }
+    }
+
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  // Physics world lifecycle (booted for the embedded 3D workbench)
   const physicsRef = useRef<RoboticsPhysicsWorld | null>(null);
   const [physicsReady, setPhysicsReady] = useState(false);
 
   useEffect(() => {
-    if (appView !== 'simulator') return;
     let cancelled = false;
     ensureRapierInitialized().then(() => {
       if (cancelled) return;
@@ -117,7 +143,7 @@ export default function App() {
         setPhysicsReady(false);
       }
     };
-  }, [appView]);
+  }, []);
 
   // Robot state
   const [jointAnglesDeg, setJointAnglesDeg] = useState<JointTuple>(
@@ -934,49 +960,14 @@ export default function App() {
   }, []);
 
   const handleSignOut = useCallback(() => {
-    signOutUser();
+    void signOutUser();
     setSession(null);
     setProfile(null);
   }, []);
 
-  if (appView === 'landing') {
-    return (
-      <>
-        <LandingPage
-          session={session}
-          profile={profile}
-          onEnterSimulator={() => setAppView('simulator')}
-          onAuthSuccess={handleAuthSuccess}
-          onSignOut={handleSignOut}
-          onOpenProfileModal={() => setProfileModalOpen(true)}
-          onOpenFeedbackModal={() => setFeedbackModalOpen(true)}
-        />
-        <AuthModal
-          open={authModalOpen}
-          onClose={() => setAuthModalOpen(false)}
-          onAuthSuccess={handleAuthSuccess}
-        />
-        <ProfileModal
-          open={profileModalOpen}
-          profile={profile}
-          onClose={() => setProfileModalOpen(false)}
-          onProfileSaved={handleProfileSaved}
-          onSignOut={handleSignOut}
-        />
-        <FeedbackModal
-          open={feedbackModalOpen}
-          userId={session?.userId ?? null}
-          userEmail={session?.email ?? ''}
-          appView="landing"
-          onClose={() => setFeedbackModalOpen(false)}
-        />
-      </>
-    );
-  }
-
-  return (
+  const simulatorWorkbench = (
     <div
-      className="flex h-screen w-screen flex-col overflow-hidden bg-[#0d1015] text-[#e6eaf0]"
+      className="flex h-[780px] w-full flex-col overflow-hidden rounded-lg border border-white/10 bg-[#0d1015] text-[#e6eaf0] shadow-2xl"
       data-sim-ready={physicsReady ? 'true' : 'false'}
       data-control-mode={controlMode}
       data-grasping={gripper.isGrasping ? 'true' : 'false'}
@@ -992,10 +983,6 @@ export default function App() {
         busCurrentAmps={latestTelemetry.busCurrentAmps}
         peakLoadPct={latestTelemetry.peakJointLoadPct}
         profile={profile}
-        onReturnToLanding={() => {
-          setIsPlayingDemo(false);
-          setAppView('landing');
-        }}
         onToggleSimulation={() => setSimulationRunning((v) => !v)}
         onResetLab={handleResetLab}
         onToggleRecord={handleToggleRecord}
@@ -1112,6 +1099,20 @@ export default function App() {
         onUpdateFrameAction={handleUpdateFrameAction}
         onDeleteFrame={handleDeleteFrame}
       />
+    </div>
+  );
+
+  return (
+    <>
+      <LandingPage
+        session={session}
+        profile={profile}
+        simulatorSection={simulatorWorkbench}
+        onAuthSuccess={handleAuthSuccess}
+        onSignOut={handleSignOut}
+        onOpenProfileModal={() => setProfileModalOpen(true)}
+        onOpenFeedbackModal={() => setFeedbackModalOpen(true)}
+      />
 
       <HardwareBridgeModal
         open={bridgeModalOpen}
@@ -1141,9 +1142,9 @@ export default function App() {
         open={feedbackModalOpen}
         userId={session?.userId ?? null}
         userEmail={session?.email ?? ''}
-        appView="simulator"
+        appView="landing"
         onClose={() => setFeedbackModalOpen(false)}
       />
-    </div>
+    </>
   );
 }

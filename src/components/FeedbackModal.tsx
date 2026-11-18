@@ -152,7 +152,7 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@lab.org"
+                placeholder="you@example.com"
                 className="w-full rounded border border-white/15 bg-[#0d1015] px-3 py-1.5 text-xs text-slate-100 focus:border-amber-500 focus:outline-none"
               />
             </label>

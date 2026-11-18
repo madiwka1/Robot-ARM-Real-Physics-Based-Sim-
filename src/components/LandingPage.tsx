@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
-import { ArrowRight, CheckCircle2, Cpu, MessageSquare, Sliders, User } from 'lucide-react';
+import { ArrowDown, CheckCircle2, Cpu, MessageSquare, Sliders } from 'lucide-react';
 import {
   AVATAR_COLOR_OPTIONS,
   getInitials,
   isSupabaseConfigured,
   registerUserWithEmail,
-  ROLE_PRESETS,
   signInUserWithEmail,
   type UserProfile,
   type UserSession,
@@ -17,8 +16,12 @@ const GRIPPER_IMAGE_SRC = '/src/assets/images/axislab_gripper_closeup_1794994281
 interface LandingPageProps {
   session: UserSession | null;
   profile: UserProfile | null;
-  onEnterSimulator: () => void;
-  onAuthSuccess: (session: UserSession, profile: UserProfile) => void;
+  simulatorSection: React.ReactNode;
+  onAuthSuccess: (
+    session: UserSession,
+    profile: UserProfile,
+    verificationEmailSent: boolean,
+  ) => void;
   onSignOut: () => void;
   onOpenProfileModal: () => void;
   onOpenFeedbackModal: () => void;
@@ -27,7 +30,7 @@ interface LandingPageProps {
 export const LandingPage: React.FC<LandingPageProps> = ({
   session,
   profile,
-  onEnterSimulator,
+  simulatorSection,
   onAuthSuccess,
   onSignOut,
   onOpenProfileModal,
@@ -38,50 +41,46 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
   const [authTab, setAuthTab] = useState<'register' | 'signin'>('register');
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
-  const [roleTitle, setRoleTitle] = useState(ROLE_PRESETS[0]);
-  const [organization, setOrganization] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [justRegisteredEmail, setJustRegisteredEmail] = useState<string | null>(null);
+  const [statusNotice, setStatusNotice] = useState<string | null>(null);
 
   const supabaseActive = isSupabaseConfigured();
-
-  const scrollToRegister = () => {
-    const el = document.getElementById('register');
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-  };
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
+    setStatusNotice(null);
     setSubmitting(true);
     try {
       if (authTab === 'register') {
         const res = await registerUserWithEmail({
           email,
-          password,
           displayName,
-          roleTitle,
-          organization,
         });
         if (!res.ok) {
           setFormError(res.error);
           return;
         }
-        setJustRegisteredEmail(res.session.email);
-        onAuthSuccess(res.session, res.profile);
+        setStatusNotice(
+          res.verificationEmailSent
+            ? `Registered ${res.session.email}. Check your inbox for the Supabase confirmation link to activate cross-device sync.`
+            : `Registered ${res.session.email} and saved your display profile.`,
+        );
+        onAuthSuccess(res.session, res.profile, res.verificationEmailSent);
       } else {
-        const res = await signInUserWithEmail({ email, password });
+        const res = await signInUserWithEmail({ email });
         if (!res.ok) {
           setFormError(res.error);
           return;
         }
-        setJustRegisteredEmail(null);
-        onAuthSuccess(res.session, res.profile);
+        setStatusNotice(
+          res.verificationEmailSent
+            ? `Sign-in link sent to ${res.session.email} via Supabase Auth.`
+            : `Signed in as ${res.profile.displayName}.`,
+        );
+        onAuthSuccess(res.session, res.profile, res.verificationEmailSent);
       }
     } finally {
       setSubmitting(false);
@@ -95,8 +94,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   return (
     <div className="min-h-screen bg-[#0d1015] text-[#e6eaf0] overflow-x-hidden">
       {/* Top Bar: 3-zone contract */}
-      <header className="sticky top-0 z-30 border-b border-white/10 bg-[#0d1015]/95">
-        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-8 px-6">
+      <header className="sticky top-0 z-30 border-b border-white/10 bg-[#0d1015]/95 backdrop-blur-xs">
+        <div className="mx-auto flex h-16 max-w-[1440px] items-center justify-between gap-8 px-6">
           {/* Zone 1: Single-element brand wordmark */}
           <a
             href="#top"
@@ -105,11 +104,17 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             AxisLab 6
           </a>
 
-          {/* Zone 2: Concise single-line navigation links */}
+          {/* Zone 2: Concise single-line section anchor links */}
           <nav
             aria-label="Primary Navigation"
             className="hidden md:flex items-center gap-7 text-sm font-medium text-slate-300"
           >
+            <a
+              href="#simulator"
+              className="hover:text-white transition-colors whitespace-nowrap shrink-0"
+            >
+              Simulator
+            </a>
             <a
               href="#capabilities"
               className="hover:text-white transition-colors whitespace-nowrap shrink-0"
@@ -117,16 +122,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               Capabilities
             </a>
             <a
-              href="#specifications"
-              className="hover:text-white transition-colors whitespace-nowrap shrink-0"
-            >
-              Specifications
-            </a>
-            <a
               href="#register"
               className="hover:text-white transition-colors whitespace-nowrap shrink-0"
             >
-              Registration
+              Register
             </a>
             <button
               type="button"
@@ -139,22 +138,27 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
           {/* Zone 3: Single primary action */}
           <div className="flex items-center gap-3 shrink-0">
-            {session ? (
+            {session && profile ? (
               <button
                 type="button"
-                onClick={onEnterSimulator}
-                className="rounded-md bg-amber-500 px-4 py-2 text-xs font-semibold text-slate-950 transition-colors hover:bg-amber-400 whitespace-nowrap shrink-0 cursor-pointer"
+                onClick={onOpenProfileModal}
+                aria-label="Customize Profile"
+                className="inline-flex items-center gap-2 rounded-md border border-white/15 bg-[#161b24] px-3 py-1.5 text-xs font-medium text-slate-100 transition-colors hover:bg-[#1e2531] whitespace-nowrap shrink-0 cursor-pointer"
               >
-                Launch Simulator
+                <span
+                  className={`flex h-5 w-5 items-center justify-center rounded-sm text-[10px] font-bold ${avatarColorMeta.bgClass} ${avatarColorMeta.textClass}`}
+                >
+                  {getInitials(profile.displayName, profile.email)}
+                </span>
+                <span className="max-w-[120px] truncate">{profile.displayName}</span>
               </button>
             ) : (
-              <button
-                type="button"
-                onClick={scrollToRegister}
-                className="rounded-md bg-amber-500 px-4 py-2 text-xs font-semibold text-slate-950 transition-colors hover:bg-amber-400 whitespace-nowrap shrink-0 cursor-pointer"
+              <a
+                href="#register"
+                className="rounded-md bg-amber-500 px-4 py-2 text-xs font-semibold text-slate-950 transition-colors hover:bg-amber-400 whitespace-nowrap shrink-0"
               >
-                Create Account
-              </button>
+                Register
+              </a>
             )}
           </div>
         </div>
@@ -162,79 +166,53 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
       <main id="top">
         {/* 1. Hero Section */}
-        <section className="mx-auto max-w-7xl px-6 pt-12 pb-10 lg:pt-16 lg:pb-14">
+        <section className="mx-auto max-w-[1440px] px-6 pt-10 pb-10 lg:pt-14 lg:pb-12">
           <div className="grid grid-cols-1 items-stretch gap-10 lg:grid-cols-12">
             {/* Hero Copy */}
-            <div className="flex flex-col justify-between gap-8 lg:col-span-6">
-              <div className="space-y-5">
+            <div className="flex flex-col justify-between gap-7 lg:col-span-6">
+              <div className="space-y-4">
                 <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-400">
-                  <span>Axis-6R Manipulation Lab</span>
+                  <span>Open Browser Playground</span>
+                  <span aria-hidden="true">·</span>
+                  <span>6-Axis Robotic Arm</span>
                   <span aria-hidden="true">·</span>
                   <span>Rapier3D Physics</span>
-                  <span aria-hidden="true">·</span>
-                  <span>Browser Native WebGL</span>
                 </div>
 
                 <h1
                   className="font-bold tracking-tight text-slate-100 [text-wrap:balance]"
                   style={{ fontSize: 'clamp(2.25rem, 3.6vw, 3.5rem)', lineHeight: 1.08 }}
                 >
-                  Train and validate 6-DOF robotic arms directly in your browser.
+                  Control, experiment, and train a 6-DOF robotic arm directly on this page.
                 </h1>
 
                 <p className="max-w-xl text-base leading-relaxed text-slate-300">
-                  AxisLab 6 combines an articulated 6-axis manipulator, damped least-squares inverse
-                  kinematics, rigid-body object grasping, live motor power telemetry, and JSON/CSV
-                  demonstration export with zero local installation.
+                  AxisLab 6 puts an interactive 6-axis arm, rigid-body object grasping, live motor
+                  power graphs, and demonstration export right below—open to everyone with zero
+                  installation required.
                 </p>
               </div>
 
-              <div className="flex flex-wrap items-center gap-5">
-                {session ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={onEnterSimulator}
-                      className="inline-flex items-center gap-2 rounded-md bg-amber-500 px-5 py-2.5 text-sm font-semibold text-slate-950 transition-colors hover:bg-amber-400 whitespace-nowrap cursor-pointer"
-                    >
-                      <span>Open 3D Laboratory</span>
-                      <ArrowRight className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={onOpenProfileModal}
-                      className="inline-flex items-center gap-2 text-sm font-medium text-slate-300 hover:text-white transition-colors whitespace-nowrap cursor-pointer"
-                    >
-                      <User className="h-4 w-4 text-amber-400" />
-                      <span>Customize Profile ({profile?.displayName ?? session.email})</span>
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      onClick={scrollToRegister}
-                      className="inline-flex items-center gap-2 rounded-md bg-amber-500 px-5 py-2.5 text-sm font-semibold text-slate-950 transition-colors hover:bg-amber-400 whitespace-nowrap cursor-pointer"
-                    >
-                      <span>Register with Email</span>
-                      <ArrowRight className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={onEnterSimulator}
-                      className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-300 hover:text-white transition-colors whitespace-nowrap cursor-pointer"
-                    >
-                      <span>Launch Live Simulator</span>
-                      <ArrowRight className="h-4 w-4 text-slate-400" />
-                    </button>
-                  </>
-                )}
+              <div className="flex flex-wrap items-center gap-6">
+                <a
+                  href="#simulator"
+                  className="inline-flex items-center gap-2 rounded-md bg-amber-500 px-5 py-2.5 text-sm font-semibold text-slate-950 transition-colors hover:bg-amber-400 whitespace-nowrap"
+                >
+                  <span>Scroll to 3D Simulator</span>
+                  <ArrowDown className="h-4 w-4" />
+                </a>
+                <a
+                  href="#register"
+                  className="text-sm font-medium text-slate-300 hover:text-white transition-colors whitespace-nowrap"
+                >
+                  {session ? 'View Your Registration' : 'Register with Email'}
+                </a>
               </div>
             </div>
 
             {/* Hero Visual */}
             <div className="lg:col-span-6">
-              <div className="h-full min-h-[300px] overflow-hidden rounded-lg border border-white/10 bg-[#12161d]">
+              <div className="h-full min-h-[290px] overflow-hidden rounded-lg border border-white/10 bg-[#12161d]">
                 {!heroImgFailed ? (
                   <img
                     src={HERO_IMAGE_SRC}
@@ -244,13 +222,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                     className="h-full w-full object-cover"
                   />
                 ) : (
-                  <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 bg-gradient-to-br from-[#141923] to-[#0d1015] p-8 text-center">
+                  <div className="flex h-full min-h-[300px] flex-col items-center justify-center gap-3 bg-gradient-to-br from-[#141923] to-[#0d1015] p-8 text-center">
                     <Cpu className="h-10 w-10 text-amber-400" />
                     <div className="text-sm font-semibold text-slate-200">
                       Axis-6R Interactive 3D Workspace
                     </div>
                     <p className="max-w-xs text-xs text-slate-400">
-                      Real-time Three.js + Rapier3D physics simulation ready to launch.
+                      Scroll down to move joints, pick up objects, and record demonstrations.
                     </p>
                   </div>
                 )}
@@ -298,25 +276,38 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           </div>
         </section>
 
-        {/* 2. Core Capabilities Bento Grid */}
-        <section id="capabilities" className="mx-auto max-w-7xl px-6 py-12">
-          <div className="mb-8 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-            <div className="space-y-1.5">
+        {/* 2. Embedded Interactive 3D Simulator Section */}
+        <section
+          id="simulator"
+          aria-label="Interactive 3D Robotics Simulator"
+          className="mx-auto max-w-[1440px] px-4 py-8 sm:px-6"
+        >
+          <div className="mb-4 flex flex-col gap-1.5 sm:flex-row sm:items-end sm:justify-between">
+            <div>
               <div className="text-xs font-medium text-amber-400">
-                Simulation Architecture
+                Interactive Workbench
               </div>
-              <h2 className="text-2xl font-semibold tracking-tight text-slate-100 sm:text-3xl">
-                Built for kinematics testing and demonstration collection
+              <h2 className="text-xl font-semibold tracking-tight text-slate-100 sm:text-2xl">
+                Live 6-DOF Simulator
               </h2>
             </div>
-            <button
-              type="button"
-              onClick={onEnterSimulator}
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-white transition-colors self-start md:self-auto whitespace-nowrap cursor-pointer"
-            >
-              <span>Inspect live controls in simulator</span>
-              <ArrowRight className="h-3.5 w-3.5" />
-            </button>
+            <p className="text-xs text-slate-400">
+              Drag canvas to orbit · click inside 3D view to zoom with wheel · press G/R for gizmo
+            </p>
+          </div>
+
+          {simulatorSection}
+        </section>
+
+        {/* 3. Core Capabilities Bento Grid */}
+        <section id="capabilities" className="mx-auto max-w-[1440px] px-6 py-12">
+          <div className="mb-8 space-y-1.5">
+            <div className="text-xs font-medium text-amber-400">
+              Simulation Architecture
+            </div>
+            <h2 className="text-2xl font-semibold tracking-tight text-slate-100 sm:text-3xl">
+              Built for hands-on kinematics testing and demonstration recording
+            </h2>
           </div>
 
           <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
@@ -328,10 +319,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   Joint Control and 3D Direct End-Effector Manipulation
                 </h3>
                 <p className="max-w-2xl text-sm leading-relaxed text-slate-300">
-                  Drive J1 through J6 individually with degree-accurate steppers or switch to
-                  Direct IK mode to drag and rotate the tool center point (TCP) in 3D space.
-                  Monitor target versus actual position error in millimeters as joints hit reach
-                  or limit constraints.
+                  Drive J1 through J6 individually with degree-accurate sliders or switch to Direct
+                  IK mode to drag and rotate the tool center point (TCP) in 3D space. Monitor
+                  target versus actual position error in millimeters as joints hit reach limits.
                 </p>
               </div>
               <div className="mt-6 grid grid-cols-3 gap-4 border-t border-white/10 pt-4 text-xs">
@@ -407,57 +397,57 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <div className="space-y-3">
                 <div className="text-xs font-mono-tabular text-slate-400">04</div>
                 <h3 className="text-lg font-semibold text-slate-100">
-                  ROS 2 Hardware Bridge and Supabase-Ready Accounts
+                  ROS 2 Hardware Bridge and Supabase Sync
                 </h3>
                 <p className="text-sm leading-relaxed text-slate-300">
-                  Stream joint commands to rosbridge_suite over WebSocket while saving operator
-                  profiles, email registrations, and feedback using a Supabase-compatible store.
+                  Stream joint commands to rosbridge_suite over WebSocket while saving public
+                  registrations, display profiles, and feedback through Supabase.
                 </p>
               </div>
               <div className="mt-5 border-t border-white/10 pt-3 text-xs font-mono-tabular text-slate-400">
-                ws://localhost:9090 · Public email policy · Profile defaults
+                ws://localhost:9090 · Supabase Auth & RLS · Profile defaults
               </div>
             </article>
           </div>
         </section>
 
-        {/* 3. Registration & Account Conversion Section */}
+        {/* 4. Public Registration Section */}
         <section
           id="register"
-          className="mx-auto max-w-7xl px-6 py-12 border-t border-white/10"
+          className="mx-auto max-w-[1440px] px-6 py-12 border-t border-white/10"
         >
           <div className="grid grid-cols-1 gap-10 lg:grid-cols-12">
             {/* Left Explanation */}
             <div className="space-y-5 lg:col-span-5">
               <div className="text-xs font-medium text-amber-400">
-                Production Account & Early Access
+                Open to Everyone
               </div>
               <h2 className="text-2xl font-semibold tracking-tight text-slate-100 sm:text-3xl">
-                Register with your email to save your lab profile
+                Register with your email and display name
               </h2>
               <p className="text-sm leading-relaxed text-slate-300">
-                Create an operator account to store your email in the public registration registry,
-                customize your display profile and startup kinematics mode, and submit product
-                feedback as AxisLab 6 connects to Supabase Auth.
+                AxisLab 6 is open to the general public—students, makers, hobbyists, researchers,
+                and anyone curious to try a robotic arm. Enter just your email address and display
+                name to save your profile preferences.
               </p>
 
               <ul className="space-y-3 border-t border-white/10 pt-5 text-sm text-slate-300">
                 <li className="flex items-start gap-2.5">
                   <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
                   <span>
-                    Email registrations follow a dedicated Supabase public insert policy schema.
+                    Quick public registration powered by Supabase Auth and our public email policy.
                   </span>
                 </li>
                 <li className="flex items-start gap-2.5">
                   <Sliders className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
                   <span>
-                    Profile customization sets default control mode (Joint vs Direct IK) and axes.
+                    Customize your avatar, display name, and preferred simulator control mode.
                   </span>
                 </li>
                 <li className="flex items-start gap-2.5">
                   <MessageSquare className="mt-0.5 h-4 w-4 shrink-0 text-sky-400" />
                   <span>
-                    Integrated feedback menu logs bug reports and feature requests cleanly.
+                    Share feedback anytime from the Feedback menu in the header or workbench.
                   </span>
                 </li>
               </ul>
@@ -479,26 +469,26 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                           <div className="text-base font-semibold text-slate-100">
                             {profile.displayName}
                           </div>
-                          <div className="text-xs text-slate-400">
-                            {profile.roleTitle}
-                            {profile.organization ? ` · ${profile.organization}` : ''}
-                          </div>
-                          <div className="font-mono-tabular text-xs text-slate-500">
+                          <div className="font-mono-tabular text-xs text-slate-400">
                             {profile.email}
                           </div>
                         </div>
                       </div>
                       <span className="text-xs font-medium text-emerald-400">
-                        {justRegisteredEmail ? 'Registration Saved' : 'Signed In'}
+                        {session.pendingEmailVerification ? 'Verification Email Sent' : 'Registered'}
                       </span>
                     </div>
 
-                    {justRegisteredEmail && (
+                    {statusNotice && (
                       <div className="rounded border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-xs text-emerald-200">
-                        Account created and <span className="font-mono-tabular">{justRegisteredEmail}</span> stored
-                        in the registration registry. You can customize your profile or enter the
-                        3D simulator now.
+                        {statusNotice}
                       </div>
+                    )}
+
+                    {profile.bio && (
+                      <p className="text-xs leading-relaxed text-slate-300">
+                        {profile.bio}
+                      </p>
                     )}
 
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 text-xs">
@@ -527,22 +517,24 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                     <div className="flex flex-wrap items-center gap-3 pt-1">
                       <button
                         type="button"
-                        onClick={onEnterSimulator}
-                        className="inline-flex items-center gap-2 rounded-md bg-amber-500 px-5 py-2.5 text-xs font-semibold text-slate-950 transition-colors hover:bg-amber-400 whitespace-nowrap cursor-pointer"
-                      >
-                        <span>Launch 3D Simulator</span>
-                        <ArrowRight className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
                         onClick={onOpenProfileModal}
-                        className="rounded-md border border-white/10 bg-[#1a202b] px-4 py-2.5 text-xs font-medium text-slate-200 transition-colors hover:bg-[#232b3a] whitespace-nowrap cursor-pointer"
+                        className="rounded-md bg-amber-500 px-5 py-2.5 text-xs font-semibold text-slate-950 transition-colors hover:bg-amber-400 whitespace-nowrap cursor-pointer"
                       >
                         Customize Profile
                       </button>
                       <button
                         type="button"
-                        onClick={onSignOut}
+                        onClick={onOpenFeedbackModal}
+                        className="rounded-md border border-white/10 bg-[#1a202b] px-4 py-2.5 text-xs font-medium text-slate-200 transition-colors hover:bg-[#232b3a] whitespace-nowrap cursor-pointer"
+                      >
+                        Send Feedback
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setStatusNotice(null);
+                          onSignOut();
+                        }}
                         className="ml-auto rounded-md px-3 py-2 text-xs font-medium text-slate-400 hover:text-slate-200 whitespace-nowrap cursor-pointer"
                       >
                         Sign Out
@@ -565,7 +557,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                               : 'text-slate-300 hover:text-white'
                           }`}
                         >
-                          Create Account
+                          Register
                         </button>
                         <button
                           type="button"
@@ -583,89 +575,39 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                         </button>
                       </div>
                       <span className="text-xs text-slate-400">
-                        {supabaseActive ? 'Supabase Auth' : 'Supabase-Ready Email Auth'}
+                        {supabaseActive ? 'Supabase Connected' : 'Public Registration'}
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <label className="block space-y-1.5 sm:col-span-2">
+                    <div className="grid grid-cols-1 gap-4">
+                      <label className="block space-y-1.5">
                         <span className="block text-xs font-medium text-slate-300">
-                          Work or Lab Email
+                          Email Address
                         </span>
                         <input
                           type="email"
                           required
                           value={email}
                           onChange={(e) => setEmail(e.target.value)}
-                          placeholder="operator@roboticslab.org"
-                          className="w-full rounded-md border border-white/15 bg-[#0d1015] px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
-                        />
-                      </label>
-
-                      <label
-                        className={`block space-y-1.5 ${
-                          authTab === 'signin' ? 'sm:col-span-2' : ''
-                        }`}
-                      >
-                        <span className="block text-xs font-medium text-slate-300">
-                          Password
-                        </span>
-                        <input
-                          type="password"
-                          required
-                          minLength={6}
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          placeholder="Minimum 6 characters"
-                          className="w-full rounded-md border border-white/15 bg-[#0d1015] px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
+                          placeholder="you@example.com"
+                          className="w-full rounded-md border border-white/15 bg-[#0d1015] px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
                         />
                       </label>
 
                       {authTab === 'register' && (
-                        <>
-                          <label className="block space-y-1.5">
-                            <span className="block text-xs font-medium text-slate-300">
-                              Display Name
-                            </span>
-                            <input
-                              type="text"
-                              value={displayName}
-                              onChange={(e) => setDisplayName(e.target.value)}
-                              placeholder="Ada Vance"
-                              className="w-full rounded-md border border-white/15 bg-[#0d1015] px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
-                            />
-                          </label>
-
-                          <label className="block space-y-1.5">
-                            <span className="block text-xs font-medium text-slate-300">
-                              Role
-                            </span>
-                            <select
-                              value={roleTitle}
-                              onChange={(e) => setRoleTitle(e.target.value)}
-                              className="w-full rounded-md border border-white/15 bg-[#0d1015] px-3 py-2 text-sm text-slate-100 focus:border-amber-500 focus:outline-none"
-                            >
-                              {ROLE_PRESETS.map((r) => (
-                                <option key={r} value={r}>
-                                  {r}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-
-                          <label className="block space-y-1.5">
-                            <span className="block text-xs font-medium text-slate-300">
-                              Organization / Lab (optional)
-                            </span>
-                            <input
-                              type="text"
-                              value={organization}
-                              onChange={(e) => setOrganization(e.target.value)}
-                              placeholder="Autonomous Manipulation Group"
-                              className="w-full rounded-md border border-white/15 bg-[#0d1015] px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
-                            />
-                          </label>
-                        </>
+                        <label className="block space-y-1.5">
+                          <span className="block text-xs font-medium text-slate-300">
+                            Display Name
+                          </span>
+                          <input
+                            type="text"
+                            required
+                            value={displayName}
+                            onChange={(e) => setDisplayName(e.target.value)}
+                            placeholder="Alex Rivera"
+                            className="w-full rounded-md border border-white/15 bg-[#0d1015] px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
+                          />
+                        </label>
                       )}
                     </div>
 
@@ -680,7 +622,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
                     <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
                       <span className="text-xs text-slate-400">
-                        Emails are stored under the public registration policy.
+                        {supabaseActive
+                          ? 'Stores your email via Supabase and sends a sign-in link.'
+                          : 'Open to everyone — only your email and display name are needed.'}
                       </span>
                       <button
                         type="submit"
@@ -691,7 +635,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                           ? 'Saving...'
                           : authTab === 'register'
                             ? 'Register with Email'
-                            : 'Sign In to AxisLab 6'}
+                            : 'Sign In with Email'}
                       </button>
                     </div>
                   </form>
@@ -704,37 +648,36 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
       {/* Quiet Footer */}
       <footer className="border-t border-white/10 bg-[#0b0e13]">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-6 py-6 text-xs text-slate-400">
+        <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-4 px-6 py-6 text-xs text-slate-400">
           <div className="flex items-center gap-3">
             <span className="font-semibold text-slate-200">AxisLab 6</span>
             <span aria-hidden="true">·</span>
             <span>
               {supabaseActive
                 ? 'Supabase Connected'
-                : 'Local Persistence Active (Supabase Schema Included)'}
+                : 'Supabase Schema Ready (Local Persistence Active)'}
             </span>
           </div>
 
           <div className="flex items-center gap-6">
+            <a href="#top" className="hover:text-slate-200 transition-colors">
+              Top
+            </a>
+            <a href="#simulator" className="hover:text-slate-200 transition-colors">
+              Simulator
+            </a>
             <a href="#capabilities" className="hover:text-slate-200 transition-colors">
               Capabilities
             </a>
             <a href="#register" className="hover:text-slate-200 transition-colors">
-              Registration
+              Register
             </a>
             <button
               type="button"
               onClick={onOpenFeedbackModal}
               className="hover:text-slate-200 transition-colors cursor-pointer"
             >
-              Send Feedback
-            </button>
-            <button
-              type="button"
-              onClick={onEnterSimulator}
-              className="text-amber-400 hover:text-amber-300 transition-colors cursor-pointer"
-            >
-              Open Simulator
+              Feedback
             </button>
           </div>
         </div>

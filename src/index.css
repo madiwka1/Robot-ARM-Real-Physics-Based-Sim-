@@ -6,17 +6,26 @@
     --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   }
 
+  html {
+    scroll-behavior: smooth;
+  }
+
   html,
-  body,
-  #root {
-    height: 100%;
+  body {
+    min-height: 100%;
     width: 100%;
     margin: 0;
     padding: 0;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
     font-family: var(--font-sans);
     background-color: #0d1015;
     color: #e6eaf0;
+  }
+
+  #root {
+    min-height: 100%;
+    width: 100%;
   }
 }
 

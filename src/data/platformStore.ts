@@ -1,4 +1,7 @@
+import { getSupabaseClient, isSupabaseConfigured } from '../lib/supabaseClient';
 import type { ControlMode } from '../robotics/types';
+
+export { isSupabaseConfigured };
 
 export type AvatarColor = 'amber' | 'sky' | 'emerald' | 'rose' | 'slate';
 
@@ -13,15 +16,13 @@ export interface UserSession {
   email: string;
   createdAt: string;
   provider: 'local' | 'supabase';
-  accessToken?: string;
+  pendingEmailVerification?: boolean;
 }
 
 export interface UserProfile {
   userId: string;
   email: string;
   displayName: string;
-  roleTitle: string;
-  organization: string;
   bio: string;
   avatarColor: AvatarColor;
   defaultControlMode: ControlMode;
@@ -32,9 +33,7 @@ export interface UserProfile {
 export interface EmailRegistrationRecord {
   id: string;
   email: string;
-  fullName: string;
-  roleTitle: string;
-  organization: string;
+  displayName: string;
   source: string;
   createdAt: string;
 }
@@ -53,7 +52,7 @@ export interface FeedbackSubmission {
 interface StoredAccount {
   userId: string;
   email: string;
-  passwordHash: string;
+  displayName: string;
   createdAt: string;
 }
 
@@ -70,16 +69,8 @@ export const AVATAR_COLOR_OPTIONS: Array<{
   { id: 'slate', label: 'Graphite', bgClass: 'bg-slate-600', textClass: 'text-white' },
 ];
 
-export const ROLE_PRESETS = [
-  'Robotics Engineer',
-  'ML / Embodied AI Researcher',
-  'Controls & Kinematics Lead',
-  'Mechatronics Student',
-  'Simulation Architect',
-];
-
 const KEYS = {
-  accounts: 'axislab_accounts_v1',
+  accounts: 'axislab_accounts_v2',
   session: 'axislab_session_v1',
   profiles: 'axislab_profiles_v1',
   emails: 'axislab_email_registrations_v1',
@@ -150,40 +141,13 @@ function readJsonRecord<T>(key: string): Record<string, T> {
   }
 }
 
-function getSupabaseEnv(): { url: string; anonKey: string } | null {
-  try {
-    const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
-    const url = env?.VITE_SUPABASE_URL?.trim() ?? '';
-    const anonKey = env?.VITE_SUPABASE_ANON_KEY?.trim() ?? '';
-    if (url.startsWith('http') && anonKey.length > 10) {
-      return { url: url.replace(/\/$/, ''), anonKey };
-    }
-  } catch {
-    // Running outside Vite (e.g., node:test)
-  }
-  return null;
-}
-
-export function isSupabaseConfigured(): boolean {
-  return getSupabaseEnv() !== null;
-}
-
 export function validateEmail(email: string): boolean {
   const normalized = email.trim();
   return /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(normalized);
 }
 
-export function validatePassword(password: string): boolean {
-  return password.length >= 6;
-}
-
-function simpleLocalHash(input: string): string {
-  let hash = 2166136261;
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return `h_${(hash >>> 0).toString(16)}`;
+export function validateDisplayName(displayName: string): boolean {
+  return displayName.trim().length >= 2;
 }
 
 export function getInitials(displayName: string, email: string): string {
@@ -202,16 +166,12 @@ export function buildDefaultProfile(params: {
   userId: string;
   email: string;
   displayName?: string;
-  roleTitle?: string;
-  organization?: string;
 }): UserProfile {
-  const fallbackName = params.email.split('@')[0] || 'Lab Operator';
+  const fallbackName = params.email.split('@')[0] || 'Visitor';
   return {
     userId: params.userId,
     email: params.email.toLowerCase(),
     displayName: (params.displayName ?? '').trim() || fallbackName,
-    roleTitle: (params.roleTitle ?? '').trim() || 'Robotics Engineer',
-    organization: (params.organization ?? '').trim(),
     bio: '',
     avatarColor: 'amber',
     defaultControlMode: 'joint',
@@ -230,20 +190,126 @@ export function getSession(): UserSession | null {
   }
 }
 
-export function signOutUser(): void {
+export async function signOutUser(): Promise<void> {
   removeStorage(KEYS.session);
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      // Ignore network errors during sign-out
+    }
+  }
 }
 
 export function getProfile(userId: string): UserProfile | null {
   const profiles = readJsonRecord<UserProfile>(KEYS.profiles);
-  return profiles[userId] ?? null;
+  const found = profiles[userId];
+  if (!found) return null;
+  return {
+    userId: found.userId,
+    email: found.email,
+    displayName: found.displayName,
+    bio: found.bio ?? '',
+    avatarColor: found.avatarColor ?? 'amber',
+    defaultControlMode: found.defaultControlMode ?? 'joint',
+    showJointAxesDefault: found.showJointAxesDefault ?? true,
+    updatedAt: found.updatedAt,
+  };
+}
+
+function saveLocalProfile(profile: UserProfile): void {
+  const profiles = readJsonRecord<UserProfile>(KEYS.profiles);
+  profiles[profile.userId] = profile;
+  writeStorage(KEYS.profiles, JSON.stringify(profiles));
+}
+
+export async function hydrateSupabaseSession(): Promise<{
+  session: UserSession;
+  profile: UserProfile;
+} | null> {
+  const supabase = getSupabaseClient();
+  if (!supabase) return null;
+
+  try {
+    const { data, error } = await supabase.auth.getSession();
+    if (error || !data.session?.user) return null;
+
+    const user = data.session.user;
+    const email = (user.email ?? '').toLowerCase();
+    const metaName =
+      typeof user.user_metadata?.display_name === 'string'
+        ? user.user_metadata.display_name
+        : '';
+
+    const session: UserSession = {
+      userId: user.id,
+      email,
+      createdAt: user.created_at ?? new Date().toISOString(),
+      provider: 'supabase',
+      pendingEmailVerification: false,
+    };
+    writeStorage(KEYS.session, JSON.stringify(session));
+
+    // Fetch remote profile row if present
+    const { data: row } = await supabase
+      .from('profiles')
+      .select(
+        'id, email, display_name, bio, avatar_color, default_control_mode, show_joint_axes_default, updated_at',
+      )
+      .eq('id', user.id)
+      .maybeSingle();
+
+    const localExisting = getProfile(user.id);
+    const profile: UserProfile = row
+      ? {
+          userId: row.id,
+          email: (row.email || email).toLowerCase(),
+          displayName: row.display_name || metaName || email.split('@')[0] || 'Visitor',
+          bio: row.bio ?? '',
+          avatarColor: (row.avatar_color as AvatarColor) ?? 'amber',
+          defaultControlMode: (row.default_control_mode as ControlMode) ?? 'joint',
+          showJointAxesDefault: row.show_joint_axes_default ?? true,
+          updatedAt: row.updated_at ?? new Date().toISOString(),
+        }
+      : localExisting ??
+        buildDefaultProfile({
+          userId: user.id,
+          email,
+          displayName: metaName,
+        });
+
+    saveLocalProfile(profile);
+    return { session, profile };
+  } catch {
+    return null;
+  }
+}
+
+export function subscribeToSupabaseAuth(
+  onSessionChange: (payload: { session: UserSession; profile: UserProfile } | null) => void,
+): () => void {
+  const supabase = getSupabaseClient();
+  if (!supabase) return () => {};
+
+  const { data } = supabase.auth.onAuthStateChange(async (event, authSession) => {
+    if (event === 'SIGNED_OUT' || !authSession?.user) {
+      return;
+    }
+    const hydrated = await hydrateSupabaseSession();
+    if (hydrated) {
+      onSessionChange(hydrated);
+    }
+  });
+
+  return () => {
+    data.subscription.unsubscribe();
+  };
 }
 
 export async function recordPublicEmailRegistration(params: {
   email: string;
-  fullName?: string;
-  roleTitle?: string;
-  organization?: string;
+  displayName?: string;
   source?: string;
 }): Promise<{ ok: true; record: EmailRegistrationRecord } | { ok: false; error: string }> {
   const email = params.email.trim().toLowerCase();
@@ -251,43 +317,36 @@ export async function recordPublicEmailRegistration(params: {
     return { ok: false, error: 'Please enter a valid email address.' };
   }
 
+  const displayName = (params.displayName ?? '').trim();
   const list = readJsonArray<EmailRegistrationRecord>(KEYS.emails);
   const existing = list.find((item) => item.email === email);
   const record: EmailRegistrationRecord = existing ?? {
     id: `reg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     email,
-    fullName: (params.fullName ?? '').trim(),
-    roleTitle: (params.roleTitle ?? '').trim() || 'Robotics Engineer',
-    organization: (params.organization ?? '').trim(),
-    source: params.source ?? 'landing_page',
+    displayName,
+    source: params.source ?? 'public_registration',
     createdAt: new Date().toISOString(),
   };
 
   if (!existing) {
     writeStorage(KEYS.emails, JSON.stringify([record, ...list]));
+  } else if (displayName && !existing.displayName) {
+    const updatedList = list.map((item) =>
+      item.email === email ? { ...item, displayName } : item,
+    );
+    writeStorage(KEYS.emails, JSON.stringify(updatedList));
   }
 
-  const sb = getSupabaseEnv();
-  if (sb && typeof fetch === 'function') {
+  const supabase = getSupabaseClient();
+  if (supabase) {
     try {
-      await fetch(`${sb.url}/rest/v1/email_registrations`, {
-        method: 'POST',
-        headers: {
-          apikey: sb.anonKey,
-          Authorization: `Bearer ${sb.anonKey}`,
-          'Content-Type': 'application/json',
-          Prefer: 'resolution=ignore-duplicates',
-        },
-        body: JSON.stringify({
-          email: record.email,
-          full_name: record.fullName,
-          role_title: record.roleTitle,
-          organization: record.organization,
-          source: record.source,
-        }),
+      await supabase.from('email_registrations').insert({
+        email: record.email,
+        display_name: displayName || record.displayName,
+        source: record.source,
       });
     } catch {
-      // Local record already persisted safely
+      // Ignore duplicate / network errors cleanly since local record is saved
     }
   }
 
@@ -300,92 +359,115 @@ export function listPublicEmailRegistrations(): EmailRegistrationRecord[] {
 
 export async function registerUserWithEmail(params: {
   email: string;
-  password: string;
-  displayName?: string;
-  roleTitle?: string;
-  organization?: string;
+  displayName: string;
 }): Promise<
-  | { ok: true; session: UserSession; profile: UserProfile }
+  | {
+      ok: true;
+      session: UserSession;
+      profile: UserProfile;
+      verificationEmailSent: boolean;
+    }
   | { ok: false; error: string }
 > {
   const email = params.email.trim().toLowerCase();
+  const displayName = params.displayName.trim();
+
   if (!validateEmail(email)) {
     return { ok: false, error: 'Please enter a valid email address.' };
   }
-  if (!validatePassword(params.password)) {
-    return { ok: false, error: 'Password must be at least 6 characters.' };
+  if (!validateDisplayName(displayName)) {
+    return { ok: false, error: 'Please enter a display name (at least 2 characters).' };
   }
 
-  const sb = getSupabaseEnv();
-  if (sb && typeof fetch === 'function') {
-    try {
-      const res = await fetch(`${sb.url}/auth/v1/signup`, {
-        method: 'POST',
-        headers: {
-          apikey: sb.anonKey,
-          'Content-Type': 'application/json',
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    // 1. Store email + display name under public RLS insert policy
+    const publicRes = await recordPublicEmailRegistration({
+      email,
+      displayName,
+      source: 'public_registration',
+    });
+    if (!publicRes.ok) {
+      return publicRes;
+    }
+
+    // 2. Trigger passwordless email OTP / magic link via Supabase Auth
+    const redirectTo =
+      typeof window !== 'undefined' ? window.location.origin : undefined;
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser: true,
+        emailRedirectTo: redirectTo,
+        data: {
+          display_name: displayName,
         },
-        body: JSON.stringify({
-          email,
-          password: params.password,
-          data: {
-            display_name: (params.displayName ?? '').trim(),
-            role_title: (params.roleTitle ?? '').trim() || 'Robotics Engineer',
-            organization: (params.organization ?? '').trim(),
-          },
-        }),
-      });
-      const data = (await res.json()) as {
-        user?: { id: string; email?: string; created_at?: string };
-        access_token?: string;
-        msg?: string;
-        error_description?: string;
-      };
-      if (!res.ok) {
+      },
+    });
+
+    if (error) {
+      const msg = error.message || '';
+      const isRateLimit = /rate limit|after \d+ second|too many requests/i.test(msg);
+      if (!isRateLimit) {
         return {
           ok: false,
-          error: data.error_description || data.msg || 'Supabase signup failed.',
+          error: msg || 'Unable to register with Supabase Auth right now.',
         };
       }
-      if (data.user?.id) {
-        await recordPublicEmailRegistration({
-          email,
-          fullName: params.displayName,
-          roleTitle: params.roleTitle,
-          organization: params.organization,
-          source: 'supabase_signup',
-        });
-        const session: UserSession = {
-          userId: data.user.id,
-          email,
-          createdAt: data.user.created_at ?? new Date().toISOString(),
-          provider: 'supabase',
-          accessToken: data.access_token,
-        };
-        const profile = buildDefaultProfile({
-          userId: session.userId,
-          email,
-          displayName: params.displayName,
-          roleTitle: params.roleTitle,
-          organization: params.organization,
-        });
-        const profiles = readJsonRecord<UserProfile>(KEYS.profiles);
-        profiles[profile.userId] = profile;
-        writeStorage(KEYS.profiles, JSON.stringify(profiles));
-        writeStorage(KEYS.session, JSON.stringify(session));
-        return { ok: true, session, profile };
-      }
-    } catch {
-      return { ok: false, error: 'Network error connecting to Supabase Auth.' };
+      // Public email registration was saved; fall back to local active profile when Supabase SMTP rate-limit is reached
+      const userId = `usr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const session: UserSession = {
+        userId,
+        email,
+        createdAt: new Date().toISOString(),
+        provider: 'local',
+        pendingEmailVerification: false,
+      };
+      const profile = buildDefaultProfile({
+        userId,
+        email,
+        displayName,
+      });
+      writeStorage(KEYS.session, JSON.stringify(session));
+      saveLocalProfile(profile);
+      return {
+        ok: true,
+        session,
+        profile,
+        verificationEmailSent: false,
+      };
     }
+
+    const userId = `sb_pending_${email}`;
+    const session: UserSession = {
+      userId,
+      email,
+      createdAt: new Date().toISOString(),
+      provider: 'supabase',
+      pendingEmailVerification: true,
+    };
+    const profile = buildDefaultProfile({
+      userId,
+      email,
+      displayName,
+    });
+    writeStorage(KEYS.session, JSON.stringify(session));
+    saveLocalProfile(profile);
+
+    return {
+      ok: true,
+      session,
+      profile,
+      verificationEmailSent: true,
+    };
   }
 
-  // Local persistence mode (mirrors Supabase Auth + public email registration flow)
+  // Local persistence mode (mirrors public registration + Supabase profile shape)
   const accounts = readJsonArray<StoredAccount>(KEYS.accounts);
   if (accounts.some((acc) => acc.email === email)) {
     return {
       ok: false,
-      error: 'An account with this email already exists. Please sign in instead.',
+      error: 'This email is already registered. Switch to Sign In to continue.',
     };
   }
 
@@ -393,17 +475,15 @@ export async function registerUserWithEmail(params: {
   const account: StoredAccount = {
     userId,
     email,
-    passwordHash: simpleLocalHash(`${email}:${params.password}`),
+    displayName,
     createdAt: new Date().toISOString(),
   };
   writeStorage(KEYS.accounts, JSON.stringify([account, ...accounts]));
 
   await recordPublicEmailRegistration({
     email,
-    fullName: params.displayName,
-    roleTitle: params.roleTitle,
-    organization: params.organization,
-    source: 'registration_form',
+    displayName,
+    source: 'public_registration',
   });
 
   const session: UserSession = {
@@ -411,76 +491,85 @@ export async function registerUserWithEmail(params: {
     email,
     createdAt: account.createdAt,
     provider: 'local',
+    pendingEmailVerification: false,
   };
   writeStorage(KEYS.session, JSON.stringify(session));
 
   const profile = buildDefaultProfile({
     userId,
     email,
-    displayName: params.displayName,
-    roleTitle: params.roleTitle,
-    organization: params.organization,
+    displayName,
   });
-  const profiles = readJsonRecord<UserProfile>(KEYS.profiles);
-  profiles[userId] = profile;
-  writeStorage(KEYS.profiles, JSON.stringify(profiles));
+  saveLocalProfile(profile);
 
-  return { ok: true, session, profile };
+  return {
+    ok: true,
+    session,
+    profile,
+    verificationEmailSent: false,
+  };
 }
 
 export async function signInUserWithEmail(params: {
   email: string;
-  password: string;
 }): Promise<
-  | { ok: true; session: UserSession; profile: UserProfile }
+  | {
+      ok: true;
+      session: UserSession;
+      profile: UserProfile;
+      verificationEmailSent: boolean;
+    }
   | { ok: false; error: string }
 > {
   const email = params.email.trim().toLowerCase();
   if (!validateEmail(email)) {
     return { ok: false, error: 'Please enter a valid email address.' };
   }
-  if (!validatePassword(params.password)) {
-    return { ok: false, error: 'Password must be at least 6 characters.' };
-  }
 
-  const sb = getSupabaseEnv();
-  if (sb && typeof fetch === 'function') {
-    try {
-      const res = await fetch(`${sb.url}/auth/v1/token?grant_type=password`, {
-        method: 'POST',
-        headers: {
-          apikey: sb.anonKey,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email, password: params.password }),
-      });
-      const data = (await res.json()) as {
-        user?: { id: string; email?: string; created_at?: string };
-        access_token?: string;
-        error_description?: string;
-        msg?: string;
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    const redirectTo =
+      typeof window !== 'undefined' ? window.location.origin : undefined;
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo: redirectTo,
+      },
+    });
+    if (error) {
+      return {
+        ok: false,
+        error:
+          error.message ||
+          'Unable to sign in. Make sure this email is registered first.',
       };
-      if (!res.ok || !data.user?.id) {
-        return {
-          ok: false,
-          error: data.error_description || data.msg || 'Invalid email or password.',
-        };
-      }
-      const session: UserSession = {
-        userId: data.user.id,
-        email,
-        createdAt: data.user.created_at ?? new Date().toISOString(),
-        provider: 'supabase',
-        accessToken: data.access_token,
-      };
-      writeStorage(KEYS.session, JSON.stringify(session));
-      const existingProfile =
-        getProfile(session.userId) ??
-        buildDefaultProfile({ userId: session.userId, email });
-      return { ok: true, session, profile: existingProfile };
-    } catch {
-      return { ok: false, error: 'Unable to reach Supabase Auth.' };
     }
+
+    const userId = `sb_pending_${email}`;
+    const existing = getProfile(userId);
+    const session: UserSession = {
+      userId,
+      email,
+      createdAt: new Date().toISOString(),
+      provider: 'supabase',
+      pendingEmailVerification: true,
+    };
+    const profile =
+      existing ??
+      buildDefaultProfile({
+        userId,
+        email,
+      });
+    writeStorage(KEYS.session, JSON.stringify(session));
+    saveLocalProfile(profile);
+
+    return {
+      ok: true,
+      session,
+      profile,
+      verificationEmailSent: true,
+    };
   }
 
   const accounts = readJsonArray<StoredAccount>(KEYS.accounts);
@@ -488,11 +577,8 @@ export async function signInUserWithEmail(params: {
   if (!match) {
     return {
       ok: false,
-      error: 'No account found for this email. Switch to Create Account to register.',
+      error: 'No registration found for this email. Switch to Register to create one.',
     };
-  }
-  if (match.passwordHash !== simpleLocalHash(`${email}:${params.password}`)) {
-    return { ok: false, error: 'Incorrect password for this account.' };
   }
 
   const session: UserSession = {
@@ -500,62 +586,60 @@ export async function signInUserWithEmail(params: {
     email: match.email,
     createdAt: match.createdAt,
     provider: 'local',
+    pendingEmailVerification: false,
   };
   writeStorage(KEYS.session, JSON.stringify(session));
 
-  const profiles = readJsonRecord<UserProfile>(KEYS.profiles);
   const profile =
-    profiles[match.userId] ??
-    buildDefaultProfile({ userId: match.userId, email: match.email });
-  profiles[match.userId] = profile;
-  writeStorage(KEYS.profiles, JSON.stringify(profiles));
+    getProfile(match.userId) ??
+    buildDefaultProfile({
+      userId: match.userId,
+      email: match.email,
+      displayName: match.displayName,
+    });
+  saveLocalProfile(profile);
 
-  return { ok: true, session, profile };
+  return {
+    ok: true,
+    session,
+    profile,
+    verificationEmailSent: false,
+  };
 }
 
 export async function updateProfile(
   userId: string,
   patch: Partial<Omit<UserProfile, 'userId' | 'email' | 'updatedAt'>>,
 ): Promise<UserProfile | null> {
-  const profiles = readJsonRecord<UserProfile>(KEYS.profiles);
-  const existing = profiles[userId];
+  const existing = getProfile(userId);
   if (!existing) return null;
 
   const updated: UserProfile = {
     ...existing,
     ...patch,
     displayName: (patch.displayName ?? existing.displayName).trim() || existing.displayName,
-    roleTitle: (patch.roleTitle ?? existing.roleTitle).trim() || existing.roleTitle,
-    organization: (patch.organization ?? existing.organization).trim(),
     bio: (patch.bio ?? existing.bio).trim(),
     updatedAt: new Date().toISOString(),
   };
 
-  profiles[userId] = updated;
-  writeStorage(KEYS.profiles, JSON.stringify(profiles));
+  saveLocalProfile(updated);
 
-  const sb = getSupabaseEnv();
-  const session = getSession();
-  if (sb && session?.provider === 'supabase' && session.accessToken && typeof fetch === 'function') {
+  const supabase = getSupabaseClient();
+  if (supabase) {
     try {
-      await fetch(`${sb.url}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}`, {
-        method: 'PATCH',
-        headers: {
-          apikey: sb.anonKey,
-          Authorization: `Bearer ${session.accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
+      const { data } = await supabase.auth.getSession();
+      if (data.session?.user?.id === userId) {
+        await supabase.from('profiles').upsert({
+          id: userId,
+          email: updated.email,
           display_name: updated.displayName,
-          role_title: updated.roleTitle,
-          organization: updated.organization,
           bio: updated.bio,
           avatar_color: updated.avatarColor,
           default_control_mode: updated.defaultControlMode,
           show_joint_axes_default: updated.showJointAxesDefault,
           updated_at: updated.updatedAt,
-        }),
-      });
+        });
+      }
     } catch {
       // Local profile persisted cleanly
     }
@@ -597,25 +681,17 @@ export async function submitFeedback(params: {
   const existing = readJsonArray<FeedbackSubmission>(KEYS.feedback);
   writeStorage(KEYS.feedback, JSON.stringify([item, ...existing].slice(0, 50)));
 
-  const sb = getSupabaseEnv();
-  if (sb && typeof fetch === 'function') {
-    const session = getSession();
+  const supabase = getSupabaseClient();
+  if (supabase) {
     try {
-      await fetch(`${sb.url}/rest/v1/feedback`, {
-        method: 'POST',
-        headers: {
-          apikey: sb.anonKey,
-          Authorization: `Bearer ${session?.accessToken ?? sb.anonKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          user_id: params.userId,
-          email,
-          category: params.category,
-          rating,
-          message,
-          app_view: params.appView,
-        }),
+      const { data } = await supabase.auth.getSession();
+      await supabase.from('feedback').insert({
+        user_id: data.session?.user?.id ?? null,
+        email,
+        category: params.category,
+        rating,
+        message,
+        app_view: params.appView,
       });
     } catch {
       // Local feedback stored safely

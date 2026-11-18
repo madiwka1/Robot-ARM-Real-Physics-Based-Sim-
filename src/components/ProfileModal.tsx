@@ -3,7 +3,6 @@ import { Check, LogOut, X } from 'lucide-react';
 import {
   AVATAR_COLOR_OPTIONS,
   getInitials,
-  ROLE_PRESETS,
   updateProfile,
   type AvatarColor,
   type UserProfile,
@@ -26,8 +25,6 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   onSignOut,
 }) => {
   const [displayName, setDisplayName] = useState('');
-  const [roleTitle, setRoleTitle] = useState(ROLE_PRESETS[0]);
-  const [organization, setOrganization] = useState('');
   const [bio, setBio] = useState('');
   const [avatarColor, setAvatarColor] = useState<AvatarColor>('amber');
   const [defaultControlMode, setDefaultControlMode] = useState<ControlMode>('joint');
@@ -38,8 +35,6 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   useEffect(() => {
     if (open && profile) {
       setDisplayName(profile.displayName);
-      setRoleTitle(profile.roleTitle);
-      setOrganization(profile.organization);
       setBio(profile.bio);
       setAvatarColor(profile.avatarColor);
       setDefaultControlMode(profile.defaultControlMode);
@@ -61,8 +56,6 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
     try {
       const updated = await updateProfile(profile.userId, {
         displayName,
-        roleTitle,
-        organization,
         bio,
         avatarColor,
         defaultControlMode,
@@ -87,7 +80,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
       <div className="w-full max-w-lg rounded-lg border border-white/15 bg-[#141820] p-5 shadow-2xl">
         <div className="flex items-center justify-between border-b border-white/10 pb-3">
           <h2 className="text-sm font-semibold text-slate-100">
-            Operator Profile Customization
+            Customize Profile
           </h2>
           <button
             type="button"
@@ -136,7 +129,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="space-y-3">
             <label className="block space-y-1">
               <span className="block font-medium text-slate-300">Display Name</span>
               <input
@@ -149,40 +142,12 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
             </label>
 
             <label className="block space-y-1">
-              <span className="block font-medium text-slate-300">Role Title</span>
-              <select
-                value={ROLE_PRESETS.includes(roleTitle) ? roleTitle : 'custom'}
-                onChange={(e) => {
-                  if (e.target.value !== 'custom') setRoleTitle(e.target.value);
-                }}
-                className="w-full rounded border border-white/15 bg-[#0d1015] px-2.5 py-2 text-xs text-slate-100 focus:border-amber-500 focus:outline-none"
-              >
-                {ROLE_PRESETS.map((r) => (
-                  <option key={r} value={r}>
-                    {r}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="block space-y-1 sm:col-span-2">
-              <span className="block font-medium text-slate-300">Organization / Lab</span>
-              <input
-                type="text"
-                value={organization}
-                onChange={(e) => setOrganization(e.target.value)}
-                placeholder="e.g. Dexterous Manipulation Group"
-                className="w-full rounded border border-white/15 bg-[#0d1015] px-3 py-2 text-xs text-slate-100 focus:border-amber-500 focus:outline-none"
-              />
-            </label>
-
-            <label className="block space-y-1 sm:col-span-2">
-              <span className="block font-medium text-slate-300">Research Focus / Bio</span>
+              <span className="block font-medium text-slate-300">About / Notes</span>
               <textarea
                 rows={2}
                 value={bio}
                 onChange={(e) => setBio(e.target.value)}
-                placeholder="Training tasks, trajectory policies, or robot hardware setup..."
+                placeholder="What are you building, testing, or exploring in AxisLab 6?"
                 className="w-full rounded border border-white/15 bg-[#0d1015] px-3 py-2 text-xs text-slate-100 focus:border-amber-500 focus:outline-none"
               />
             </label>

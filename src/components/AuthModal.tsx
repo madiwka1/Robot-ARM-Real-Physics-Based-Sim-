@@ -3,7 +3,6 @@ import { X } from 'lucide-react';
 import {
   isSupabaseConfigured,
   registerUserWithEmail,
-  ROLE_PRESETS,
   signInUserWithEmail,
   type UserProfile,
   type UserSession,
@@ -12,7 +11,11 @@ import {
 interface AuthModalProps {
   open: boolean;
   onClose: () => void;
-  onAuthSuccess: (session: UserSession, profile: UserProfile) => void;
+  onAuthSuccess: (
+    session: UserSession,
+    profile: UserProfile,
+    verificationEmailSent: boolean,
+  ) => void;
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({
@@ -22,10 +25,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 }) => {
   const [tab, setTab] = useState<'register' | 'signin'>('register');
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
-  const [roleTitle, setRoleTitle] = useState(ROLE_PRESETS[0]);
-  const [organization, setOrganization] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,24 +39,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       if (tab === 'register') {
         const res = await registerUserWithEmail({
           email,
-          password,
           displayName,
-          roleTitle,
-          organization,
         });
         if (!res.ok) {
           setError(res.error);
           return;
         }
-        onAuthSuccess(res.session, res.profile);
+        onAuthSuccess(res.session, res.profile, res.verificationEmailSent);
         onClose();
       } else {
-        const res = await signInUserWithEmail({ email, password });
+        const res = await signInUserWithEmail({ email });
         if (!res.ok) {
           setError(res.error);
           return;
         }
-        onAuthSuccess(res.session, res.profile);
+        onAuthSuccess(res.session, res.profile, res.verificationEmailSent);
         onClose();
       }
     } finally {
@@ -68,13 +65,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="AxisLab Account Registration and Sign In"
+      aria-label="AxisLab 6 Account Registration and Sign In"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4"
     >
       <div className="w-full max-w-md rounded-lg border border-white/15 bg-[#141820] p-5 shadow-2xl">
         <div className="flex items-center justify-between border-b border-white/10 pb-3">
           <h2 className="text-sm font-semibold text-slate-100">
-            AxisLab 6 Account
+            AxisLab 6 Registration
           </h2>
           <button
             type="button"
@@ -101,7 +98,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     : 'text-slate-300 hover:text-white'
                 }`}
               >
-                Create Account
+                Register
               </button>
               <button
                 type="button"
@@ -119,78 +116,34 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </button>
             </div>
             <span className="text-[11px] text-slate-400">
-              {isSupabaseConfigured() ? 'Supabase Auth' : 'Email Registry'}
+              {isSupabaseConfigured() ? 'Supabase Auth' : 'Public Email Registry'}
             </span>
           </div>
 
           <label className="block space-y-1">
-            <span className="block font-medium text-slate-300">Email</span>
+            <span className="block font-medium text-slate-300">Email Address</span>
             <input
               type="email"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="engineer@axislab.dev"
-              className="w-full rounded border border-white/15 bg-[#0d1015] px-3 py-2 text-xs text-slate-100 focus:border-amber-500 focus:outline-none"
-            />
-          </label>
-
-          <label className="block space-y-1">
-            <span className="block font-medium text-slate-300">Password</span>
-            <input
-              type="password"
-              required
-              minLength={6}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Minimum 6 characters"
-              className="w-full rounded border border-white/15 bg-[#0d1015] px-3 py-2 text-xs text-slate-100 focus:border-amber-500 focus:outline-none"
+              placeholder="you@example.com"
+              className="w-full rounded border border-white/15 bg-[#0d1015] px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
             />
           </label>
 
           {tab === 'register' && (
-            <>
-              <div className="grid grid-cols-2 gap-3">
-                <label className="block space-y-1">
-                  <span className="block font-medium text-slate-300">Display Name</span>
-                  <input
-                    type="text"
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder="Ada Vance"
-                    className="w-full rounded border border-white/15 bg-[#0d1015] px-3 py-2 text-xs text-slate-100 focus:border-amber-500 focus:outline-none"
-                  />
-                </label>
-
-                <label className="block space-y-1">
-                  <span className="block font-medium text-slate-300">Role</span>
-                  <select
-                    value={roleTitle}
-                    onChange={(e) => setRoleTitle(e.target.value)}
-                    className="w-full rounded border border-white/15 bg-[#0d1015] px-2.5 py-2 text-xs text-slate-100 focus:border-amber-500 focus:outline-none"
-                  >
-                    {ROLE_PRESETS.map((r) => (
-                      <option key={r} value={r}>
-                        {r}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-
-              <label className="block space-y-1">
-                <span className="block font-medium text-slate-300">
-                  Organization (optional)
-                </span>
-                <input
-                  type="text"
-                  value={organization}
-                  onChange={(e) => setOrganization(e.target.value)}
-                  placeholder="Robotics Lab"
-                  className="w-full rounded border border-white/15 bg-[#0d1015] px-3 py-2 text-xs text-slate-100 focus:border-amber-500 focus:outline-none"
-                />
-              </label>
-            </>
+            <label className="block space-y-1">
+              <span className="block font-medium text-slate-300">Display Name</span>
+              <input
+                type="text"
+                required
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="Alex Rivera"
+                className="w-full rounded border border-white/15 bg-[#0d1015] px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
+              />
+            </label>
           )}
 
           {error && (
@@ -216,9 +169,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               className="rounded bg-amber-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-amber-400 disabled:opacity-50 cursor-pointer"
             >
               {submitting
-                ? 'Submitting...'
+                ? 'Saving...'
                 : tab === 'register'
-                  ? 'Register with Email'
+                  ? 'Register'
                   : 'Sign In'}
             </button>
           </div>

@@ -29,7 +29,6 @@ interface TopToolbarProps {
   busCurrentAmps: number;
   peakLoadPct: number;
   profile: UserProfile | null;
-  onReturnToLanding: () => void;
   onToggleSimulation: () => void;
   onResetLab: () => void;
   onToggleRecord: () => void;
@@ -51,7 +50,6 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
   busCurrentAmps,
   peakLoadPct,
   profile,
-  onReturnToLanding,
   onToggleSimulation,
   onResetLab,
   onToggleRecord,
@@ -75,16 +73,11 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
 
   return (
     <header className="flex h-12 shrink-0 items-center justify-between gap-4 border-b border-white/10 bg-[#12161d] px-4">
-      {/* Brand Title (returns to landing page) */}
+      {/* Workbench Label */}
       <div className="flex items-center gap-3 shrink-0">
-        <button
-          type="button"
-          onClick={onReturnToLanding}
-          aria-label="Back to AxisLab 6 Home"
-          className="text-sm font-semibold tracking-tight text-slate-100 hover:text-amber-400 transition-colors whitespace-nowrap cursor-pointer"
-        >
-          AxisLab 6
-        </button>
+        <span className="text-sm font-semibold tracking-tight text-slate-100 whitespace-nowrap">
+          Workbench
+        </span>
       </div>
 
       {/* Primary Toolbar Actions */}

@@ -1,23 +1,21 @@
--- AxisLab 6-DOF Robotics Simulator — Production Supabase Schema & RLS Policies
--- Run this SQL in your Supabase SQL Editor when connecting your Supabase project.
+-- AxisLab 6 Robotics Simulator — Production Supabase Schema & RLS Policies
+-- Run this SQL in your Supabase SQL Editor to set up public registration, profiles, feedback, and demonstrations.
 
 create extension if not exists "pgcrypto";
 
--- 1. Public Email Registration / Early Access Table
--- Allows anonymous/public visitors to register their email cleanly via RLS INSERT policy.
+-- 1. Public Email Registration Table
+-- Open to the general public: stores email address and display name via a public INSERT RLS policy.
 create table if not exists public.email_registrations (
   id uuid primary key default gen_random_uuid(),
   email text not null unique,
-  full_name text not null default '',
-  role_title text not null default 'Robotics Engineer',
-  organization text not null default '',
-  source text not null default 'landing_page',
+  display_name text not null default '',
+  source text not null default 'public_registration',
   created_at timestamptz not null default now()
 );
 
 alter table public.email_registrations enable row level security;
 
--- Public policy to store emails from landing page registration & early access forms
+-- Public policy to store emails from public registration forms
 drop policy if exists "Public insert email registrations" on public.email_registrations;
 create policy "Public insert email registrations"
   on public.email_registrations
@@ -39,9 +37,7 @@ create policy "Users read own email registration"
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   email text not null,
-  display_name text not null default 'Lab Operator',
-  role_title text not null default 'Robotics Engineer',
-  organization text not null default '',
+  display_name text not null default 'Visitor',
   bio text not null default '',
   avatar_color text not null default 'amber' check (avatar_color in ('amber', 'sky', 'emerald', 'rose', 'slate')),
   default_control_mode text not null default 'joint' check (default_control_mode in ('joint', 'ik')),
@@ -74,32 +70,31 @@ create policy "Users can update own profile"
   using (auth.uid() = id)
   with check (auth.uid() = id);
 
--- Automatically provision a profile whenever a user registers via Supabase Auth
+-- Automatically provision a profile whenever a user verifies via Supabase Auth
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
 security definer set search_path = public
 as $$
+declare
+  resolved_name text;
 begin
-  insert into public.profiles (id, email, display_name, role_title, organization)
-  values (
-    new.id,
-    new.email,
-    coalesce(new.raw_user_meta_data ->> 'display_name', split_part(new.email, '@', 1)),
-    coalesce(new.raw_user_meta_data ->> 'role_title', 'Robotics Engineer'),
-    coalesce(new.raw_user_meta_data ->> 'organization', '')
-  )
+  resolved_name := coalesce(
+    nullif(trim(new.raw_user_meta_data ->> 'display_name'), ''),
+    split_part(new.email, '@', 1)
+  );
+
+  insert into public.profiles (id, email, display_name)
+  values (new.id, new.email, resolved_name)
   on conflict (id) do nothing;
 
-  insert into public.email_registrations (email, full_name, role_title, organization, source)
-  values (
-    new.email,
-    coalesce(new.raw_user_meta_data ->> 'display_name', ''),
-    coalesce(new.raw_user_meta_data ->> 'role_title', 'Robotics Engineer'),
-    coalesce(new.raw_user_meta_data ->> 'organization', ''),
-    'supabase_auth_signup'
-  )
-  on conflict (email) do nothing;
+  insert into public.email_registrations (email, display_name, source)
+  values (new.email, resolved_name, 'supabase_auth_signup')
+  on conflict (email) do update
+    set display_name = case
+      when coalesce(public.email_registrations.display_name, '') = '' then excluded.display_name
+      else public.email_registrations.display_name
+    end;
 
   return new;
 end;
@@ -118,7 +113,7 @@ create table if not exists public.feedback (
   category text not null check (category in ('Feature Request', 'Physics & Kinematics', 'UI / Workflow', 'Bug Report')),
   rating integer not null check (rating >= 1 and rating <= 5),
   message text not null check (char_length(message) >= 3),
-  app_view text not null default 'simulator',
+  app_view text not null default 'site',
   created_at timestamptz not null default now()
 );
 

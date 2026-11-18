@@ -114,6 +114,7 @@ interface CameraRigProps {
   cameraPreset: CameraPreset;
   presetTrigger: number;
   orbitEnabled: boolean;
+  zoomEnabled: boolean;
   orbitRef: React.RefObject<OrbitControlsImpl | null>;
 }
 
@@ -121,6 +122,7 @@ const CameraRig: React.FC<CameraRigProps> = ({
   cameraPreset,
   presetTrigger,
   orbitEnabled,
+  zoomEnabled,
   orbitRef,
 }) => {
   const { camera, invalidate } = useThree();
@@ -162,6 +164,7 @@ const CameraRig: React.FC<CameraRigProps> = ({
       ref={orbitRef}
       makeDefault
       enabled={orbitEnabled}
+      enableZoom={zoomEnabled}
       enableDamping={!isSoftwareGl}
       dampingFactor={0.08}
       minDistance={0.35}
@@ -331,6 +334,7 @@ export const RoboticsViewport: React.FC<RoboticsViewportProps> = ({
 }) => {
   const orbitRef = useRef<OrbitControlsImpl | null>(null);
   const [gizmoDragging, setGizmoDragging] = useState(false);
+  const [viewportWheelActive, setViewportWheelActive] = useState(false);
   const [contextLost, setContextLost] = useState(false);
 
   const handleCreated = useCallback(
@@ -363,6 +367,8 @@ export const RoboticsViewport: React.FC<RoboticsViewportProps> = ({
     <div
       className="relative h-full w-full select-none bg-[#0d1015]"
       data-testid="robotics-viewport"
+      onPointerDown={() => setViewportWheelActive(true)}
+      onPointerLeave={() => setViewportWheelActive(false)}
     >
       <Canvas
         dpr={isSoftwareGl ? 1 : [1, 2]}
@@ -390,6 +396,7 @@ export const RoboticsViewport: React.FC<RoboticsViewportProps> = ({
           cameraPreset={cameraPreset}
           presetTrigger={presetTrigger}
           orbitEnabled={!gizmoDragging}
+          zoomEnabled={viewportWheelActive}
           orbitRef={orbitRef}
         />
 
