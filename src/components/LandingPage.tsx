@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowDown, CheckCircle2, Cpu, MessageSquare, Sliders } from 'lucide-react';
+import { ArrowDown, ArrowRight, CheckCircle2, Cpu, MessageSquare, Sliders } from 'lucide-react';
 import {
   AVATAR_COLOR_OPTIONS,
   getInitials,
@@ -12,11 +12,12 @@ import {
 
 const HERO_IMAGE_SRC = '/src/assets/images/axislab_hero_arm_1794994281866.jpg';
 const GRIPPER_IMAGE_SRC = '/src/assets/images/axislab_gripper_closeup_1794994281412.jpg';
+const SIMULATOR_PREVIEW_SRC = '/media/axislab-simulator-preview.png';
 
 interface LandingPageProps {
   session: UserSession | null;
   profile: UserProfile | null;
-  simulatorSection: React.ReactNode;
+  onEnterSimulator: () => void;
   onAuthSuccess: (
     session: UserSession,
     profile: UserProfile,
@@ -30,13 +31,14 @@ interface LandingPageProps {
 export const LandingPage: React.FC<LandingPageProps> = ({
   session,
   profile,
-  simulatorSection,
+  onEnterSimulator,
   onAuthSuccess,
   onSignOut,
   onOpenProfileModal,
   onOpenFeedbackModal,
 }) => {
   const [heroImgFailed, setHeroImgFailed] = useState(false);
+  const [simPreviewFailed, setSimPreviewFailed] = useState(false);
   const [gripperImgFailed, setGripperImgFailed] = useState(false);
 
   const [authTab, setAuthTab] = useState<'register' | 'signin'>('register');
@@ -183,13 +185,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   className="font-bold tracking-tight text-slate-100 [text-wrap:balance]"
                   style={{ fontSize: 'clamp(2.25rem, 3.6vw, 3.5rem)', lineHeight: 1.08 }}
                 >
-                  Control, experiment, and train a 6-DOF robotic arm directly on this page.
+                  Train and test a 6-DOF robotic arm directly in your browser.
                 </h1>
 
                 <p className="max-w-xl text-base leading-relaxed text-slate-300">
-                  AxisLab 6 puts an interactive 6-axis arm, rigid-body object grasping, live motor
-                  power graphs, and demonstration export right below—open to everyone with zero
-                  installation required.
+                  AxisLab 6 combines an articulated 6-axis manipulator, rigid-body object grasping,
+                  live motor power telemetry, and JSON/CSV demonstration export—open to everyone
+                  with zero installation required.
                 </p>
               </div>
 
@@ -198,15 +200,17 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   href="#simulator"
                   className="inline-flex items-center gap-2 rounded-md bg-amber-500 px-5 py-2.5 text-sm font-semibold text-slate-950 transition-colors hover:bg-amber-400 whitespace-nowrap"
                 >
-                  <span>Scroll to 3D Simulator</span>
+                  <span>Preview Workbench</span>
                   <ArrowDown className="h-4 w-4" />
                 </a>
-                <a
-                  href="#register"
-                  className="text-sm font-medium text-slate-300 hover:text-white transition-colors whitespace-nowrap"
+                <button
+                  type="button"
+                  onClick={onEnterSimulator}
+                  className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-300 hover:text-white transition-colors whitespace-nowrap cursor-pointer"
                 >
-                  {session ? 'View Your Registration' : 'Register with Email'}
-                </a>
+                  <span>Open Live Simulator</span>
+                  <ArrowRight className="h-4 w-4 text-slate-400" />
+                </button>
               </div>
             </div>
 
@@ -228,7 +232,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                       Axis-6R Interactive 3D Workspace
                     </div>
                     <p className="max-w-xs text-xs text-slate-400">
-                      Scroll down to move joints, pick up objects, and record demonstrations.
+                      Scroll down to preview the simulator workbench or launch the interactive lab.
                     </p>
                   </div>
                 )}
@@ -276,27 +280,52 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           </div>
         </section>
 
-        {/* 2. Embedded Interactive 3D Simulator Section */}
+        {/* 2. Live Simulator Photo Section */}
         <section
           id="simulator"
-          aria-label="Interactive 3D Robotics Simulator"
-          className="mx-auto max-w-[1440px] px-4 py-8 sm:px-6"
+          aria-label="Interactive Workbench Preview"
+          className="mx-auto max-w-[1440px] px-6 py-10"
         >
-          <div className="mb-4 flex flex-col gap-1.5 sm:flex-row sm:items-end sm:justify-between">
+          <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <div className="text-xs font-medium text-amber-400">
                 Interactive Workbench
               </div>
-              <h2 className="text-xl font-semibold tracking-tight text-slate-100 sm:text-2xl">
+              <h2 className="text-2xl font-semibold tracking-tight text-slate-100 sm:text-3xl">
                 Live 6-DOF Simulator
               </h2>
             </div>
-            <p className="text-xs text-slate-400">
-              Drag canvas to orbit · click inside 3D view to zoom with wheel · press G/R for gizmo
-            </p>
+            <button
+              type="button"
+              onClick={onEnterSimulator}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-400 hover:text-amber-300 transition-colors self-start sm:self-auto whitespace-nowrap cursor-pointer"
+            >
+              <span>Open Live Simulator</span>
+              <ArrowRight className="h-3.5 w-3.5" />
+            </button>
           </div>
 
-          {simulatorSection}
+          <div className="overflow-hidden rounded-lg border border-white/10 bg-[#0b0e13] shadow-2xl">
+            {!simPreviewFailed ? (
+              <img
+                src={SIMULATOR_PREVIEW_SRC}
+                alt="AxisLab 6 live 6-DOF robotic arm simulator interface showing the articulated arm holding the flip practice bottle, joint sliders, training timeline, and power telemetry chart"
+                referrerPolicy="no-referrer"
+                onError={() => setSimPreviewFailed(true)}
+                className="aspect-video w-full bg-[#0b0e13] object-cover"
+              />
+            ) : (
+              <div className="flex aspect-video w-full flex-col items-center justify-center gap-3 bg-gradient-to-br from-[#141923] to-[#0d1015] p-8 text-center">
+                <Cpu className="h-10 w-10 text-amber-400" />
+                <div className="text-sm font-semibold text-slate-200">
+                  AxisLab 6 Live Simulator Workbench
+                </div>
+                <p className="max-w-sm text-xs text-slate-400">
+                  Click Open Live Simulator to launch the interactive 3D workbench.
+                </p>
+              </div>
+            )}
+          </div>
         </section>
 
         {/* 3. Core Capabilities Bento Grid */}
@@ -517,17 +546,18 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                     <div className="flex flex-wrap items-center gap-3 pt-1">
                       <button
                         type="button"
-                        onClick={onOpenProfileModal}
-                        className="rounded-md bg-amber-500 px-5 py-2.5 text-xs font-semibold text-slate-950 transition-colors hover:bg-amber-400 whitespace-nowrap cursor-pointer"
+                        onClick={onEnterSimulator}
+                        className="inline-flex items-center gap-2 rounded-md bg-amber-500 px-5 py-2.5 text-xs font-semibold text-slate-950 transition-colors hover:bg-amber-400 whitespace-nowrap cursor-pointer"
                       >
-                        Customize Profile
+                        <span>Open Live Simulator</span>
+                        <ArrowRight className="h-3.5 w-3.5" />
                       </button>
                       <button
                         type="button"
-                        onClick={onOpenFeedbackModal}
+                        onClick={onOpenProfileModal}
                         className="rounded-md border border-white/10 bg-[#1a202b] px-4 py-2.5 text-xs font-medium text-slate-200 transition-colors hover:bg-[#232b3a] whitespace-nowrap cursor-pointer"
                       >
-                        Send Feedback
+                        Customize Profile
                       </button>
                       <button
                         type="button"
