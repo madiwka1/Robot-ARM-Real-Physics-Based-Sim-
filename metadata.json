@@ -1,0 +1,8 @@
+{
+  "name": "AxisLab 6-DOF Robotics Simulator",
+  "description": "Interactive 3D robotic arm training laboratory with forward/inverse kinematics, Rapier rigid-body physics, direct gizmo manipulation, gripper pick-and-place, and demonstration dataset recording.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
