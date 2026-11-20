@@ -1,6 +1,8 @@
 import React, { useMemo } from 'react';
 import * as THREE from 'three';
 import { AXIS6_ROBOT_CONFIG } from '../robotics/robotModel';
+import type { RobotModelConfig } from '../robotics/types';
+import { ServoArmMesh } from './ServoArmMesh';
 import type { JointTuple } from '../robotics/types';
 import { ROBOT_MATERIALS } from './materials';
 
@@ -56,11 +58,31 @@ interface RobotArmMeshProps {
   showWorkspace: boolean;
   onSelectEndEffector: () => void;
   onSelectJoint: (jointId: string) => void;
+  /** Robot to draw (default Axis-6R). Hobby arms use the procedural servo-arm model. */
+  config?: RobotModelConfig;
+  /** Hide the gripper when another tool (balance plate) is mounted. */
+  showGripper?: boolean;
 }
 
 const DEG_TO_RAD = Math.PI / 180;
 
-export const RobotArmMesh: React.FC<RobotArmMeshProps> = ({
+export const RobotArmMesh: React.FC<RobotArmMeshProps> = (props) =>
+  props.config && props.config.style !== 'axis6' ? (
+    <ServoArmMesh
+      config={props.config}
+      jointAnglesDeg={props.jointAnglesDeg}
+      gripperWidthMm={props.gripperWidthMm}
+      showGripper={props.showGripper ?? true}
+      showWorkspace={props.showWorkspace}
+      selectedNodeId={props.selectedNodeId}
+      onSelectEndEffector={props.onSelectEndEffector}
+      onSelectJoint={props.onSelectJoint}
+    />
+  ) : (
+    <Axis6ArmMesh {...props} />
+  );
+
+const Axis6ArmMesh: React.FC<RobotArmMeshProps> = ({
   jointAnglesDeg,
   gripperWidthMm,
   isGrasping,
@@ -69,6 +91,7 @@ export const RobotArmMesh: React.FC<RobotArmMeshProps> = ({
   showWorkspace,
   onSelectEndEffector,
   onSelectJoint,
+  showGripper = true,
 }) => {
   const cfg = AXIS6_ROBOT_CONFIG;
 
@@ -323,6 +346,7 @@ export const RobotArmMesh: React.FC<RobotArmMeshProps> = ({
                     <cylinderGeometry args={[0.034, 0.034, 0.016, 24]} />
                   </mesh>
 
+                  {showGripper && (<>
                   {/* Parallel Gripper Actuator Body */}
                   <mesh position={[0, 0.038, 0]} material={ROBOT_MATERIALS.castIronDark} castShadow receiveShadow>
                     <boxGeometry args={[0.088, 0.044, 0.048]} />
@@ -381,6 +405,7 @@ export const RobotArmMesh: React.FC<RobotArmMeshProps> = ({
                       <boxGeometry args={[0.004, 0.034, 0.022]} />
                     </mesh>
                   </group>
+                  </>)}
 
                   {/* TCP Frame Origin Marker */}
                   <group position={cfg.tcpOffsetFromJ6}>

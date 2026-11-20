@@ -20,9 +20,30 @@ export interface JointSpec {
   maxSpeedDegPerSec: number;
 }
 
+/** Electrical / actuator model used by telemetry (per-joint arrays follow J1..J6). */
+export interface ActuatorModel {
+  /** Short description of the servos, shown in the UI. */
+  label: string;
+  busVoltage: number;
+  controllerIdleWatts: number;
+  servoStandbyWatts: number;
+  /** Copper (I^2 R) holding loss coefficient, W per Nm^2 of torque. */
+  copperLossWPerNm2: number;
+  ratedTorqueNm: [number, number, number, number, number, number];
+  /** Mass carried by each joint (everything downstream of it), kg. */
+  downstreamMassKg: [number, number, number, number, number, number];
+}
+
 export interface RobotModelConfig {
   id: string;
   name: string;
+  /** Source of the kinematic numbers (for the UI / docs). */
+  source?: string;
+  actuators: ActuatorModel;
+  /** Visual style for the procedural model. */
+  style: 'axis6' | 'servo-printed';
+  /** Primary link color for 'servo-printed' arms. */
+  linkColor?: string;
   baseOffset: Vec3Tuple;
   tcpOffsetFromJ6: Vec3Tuple;
   maxReachMeters: number;
@@ -121,6 +142,17 @@ export interface Demonstration {
   updatedAt: string;
   durationMs: number;
   frames: DemoFrame[];
+  /** Task goal point for training rollouts (e.g. reach target); drawn in the viewer. */
+  goal?: Vec3Tuple;
+  /** Robot model the demo was recorded on (default: Axis-6R). */
+  robotId?: string;
+  /** Experiment setup needed to replay it (default: workbench with gripper). */
+  experiment?: 'workbench' | 'balance';
+  /**
+   * Replay props from the recorded per-frame poses instead of re-simulating them. Used for policy
+   * rollouts: chaotic tasks (balancing) would otherwise drift from what happened in training.
+   */
+  replayObjects?: boolean;
 }
 
 export type BridgeConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';

@@ -1,5 +1,7 @@
 import React from 'react';
 import {
+  Bot,
+  Brain,
   Circle,
   Download,
   FileSpreadsheet,
@@ -17,6 +19,7 @@ import {
   getInitials,
   type UserProfile,
 } from '../data/platformStore';
+import { ROBOT_MODELS } from '../robotics/robotModel';
 import type { BridgeConnectionState } from '../robotics/types';
 
 interface TopToolbarProps {
@@ -37,6 +40,12 @@ interface TopToolbarProps {
   onExportJSON: () => void;
   onExportCSV: () => void;
   onOpenBridgeModal: () => void;
+  onOpenTrainingSandbox: () => void;
+  robotId: string;
+  onSelectRobot: (id: string) => void;
+  experiment: 'workbench' | 'balance';
+  onSelectExperiment: (experiment: 'workbench' | 'balance') => void;
+  onResetBall: () => void;
   onOpenFeedbackModal: () => void;
   onOpenProfileOrAuth: () => void;
 }
@@ -59,6 +68,12 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
   onExportJSON,
   onExportCSV,
   onOpenBridgeModal,
+  onOpenTrainingSandbox,
+  robotId,
+  onSelectRobot,
+  experiment,
+  onSelectExperiment,
+  onResetBall,
   onOpenFeedbackModal,
   onOpenProfileOrAuth,
 }) => {
@@ -227,6 +242,51 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
             />
           </div>
         </div>
+
+        <label className="flex items-center gap-1.5 text-xs text-slate-400 shrink-0">
+          <Bot className="h-3.5 w-3.5 text-amber-400" />
+          <select
+            aria-label="Robot model"
+            value={robotId}
+            onChange={(e) => onSelectRobot(e.target.value)}
+            className="rounded border border-white/10 bg-[#1a202b] px-1.5 py-1.5 text-xs text-slate-200 cursor-pointer"
+          >
+            {ROBOT_MODELS.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <select
+          aria-label="Experiment"
+          value={experiment}
+          onChange={(e) => onSelectExperiment(e.target.value as 'workbench' | 'balance')}
+          className="rounded border border-white/10 bg-[#1a202b] px-1.5 py-1.5 text-xs text-slate-200 shrink-0 cursor-pointer"
+        >
+          <option value="workbench">Workbench (gripper)</option>
+          <option value="balance">Balance (plate + ball)</option>
+        </select>
+        {experiment === 'balance' && (
+          <button
+            type="button"
+            onClick={onResetBall}
+            className="flex items-center gap-1.5 rounded border border-yellow-500/30 bg-yellow-500/10 px-2.5 py-1.5 text-xs font-medium text-yellow-300 hover:bg-yellow-500/20 whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <Circle className="h-3 w-3" /> Reset ball
+          </button>
+        )}
+
+        <button
+          type="button"
+          onClick={onOpenTrainingSandbox}
+          aria-label="Open Training Sandbox"
+          className="flex items-center gap-1.5 rounded border border-white/10 bg-[#1a202b] px-2.5 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:bg-[#232b3a] whitespace-nowrap shrink-0 cursor-pointer"
+        >
+          <Brain className="h-3.5 w-3.5 text-violet-400" />
+          <span>Train</span>
+        </button>
 
         <button
           type="button"

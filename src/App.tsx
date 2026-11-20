@@ -8,6 +8,15 @@ import { LeftSidebar } from './components/LeftSidebar';
 import { ProfileModal } from './components/ProfileModal';
 import { RightSidebar } from './components/RightSidebar';
 import { TopToolbar } from './components/TopToolbar';
+import { TrainingSandboxModal } from './components/TrainingSandboxModal';
+import { InventoryModal } from './components/InventoryModal';
+import {
+  createSpecFromInventory,
+  duplicateSpec,
+  loadSceneObjects,
+  saveSceneObjects,
+  type InventoryItem,
+} from './robotics/labInventory';
 import {
   getProfile,
   getSession,
@@ -17,7 +26,7 @@ import {
   type UserProfile,
   type UserSession,
 } from './data/platformStore';
-import { ensureRapierInitialized, RoboticsPhysicsWorld } from './physics/rapierWorld';
+import { ensureRapierInitialized, PHYSICS_SUBSTEP_SEC, RoboticsPhysicsWorld } from './physics/rapierWorld';
 import { WebSocketRobotBridge } from './robotics/bridge';
 import {
   createDemoFrame,
@@ -26,8 +35,16 @@ import {
   serializeDemoToCSV,
   serializeDemoToJSON,
   interpolateDemoAtTime,
+  interpolateObjectsAtTime,
   updateDemoTiming,
 } from './robotics/dataset';
+import {
+  BALANCE_BALL_ID,
+  balanceBallSpec,
+  balanceHomeAngles,
+  ballStartPose,
+  plateRadiusFor,
+} from './sim/balance';
 import {
   clampJointAnglesDeg,
   computeForwardKinematics,
@@ -41,9 +58,12 @@ import {
   GRIPPER_DEFAULT_WIDTH_MM,
   GRIPPER_MAX_WIDTH_MM,
   GRIPPER_MIN_WIDTH_MM,
-  HOME_JOINT_ANGLES_DEG,
+  getRobotModel,
+  homeAnglesOf,
   ZERO_JOINT_ANGLES_DEG,
 } from './robotics/robotModel';
+
+const ROBOT_STORAGE_KEY = 'axislab_robot_v1';
 import {
   computeRobotTelemetry,
   isBottleUprightOnBench,
@@ -60,6 +80,7 @@ import type {
   JointTuple,
   QuatTuple,
   SceneObjectRuntimeState,
+  SceneObjectSpec,
   Vec3Tuple,
 } from './robotics/types';
 import { RoboticsViewport, type CameraPreset } from './scene/RoboticsViewport';
@@ -123,13 +144,40 @@ export default function App() {
   const physicsRef = useRef<RoboticsPhysicsWorld | null>(null);
   const [physicsReady, setPhysicsReady] = useState(false);
 
+  // Robot model (persisted) and experiment. Callbacks read robotRef so they always see the current one.
+  const [robotId, setRobotId] = useState<string>(
+    () => (typeof window !== 'undefined' && window.localStorage.getItem(ROBOT_STORAGE_KEY)) || AXIS6_ROBOT_CONFIG.id,
+  );
+  const robot = useMemo(() => getRobotModel(robotId), [robotId]);
+  const robotRef = useRef(robot);
+  robotRef.current = robot;
+  useEffect(() => {
+    window.localStorage.setItem(ROBOT_STORAGE_KEY, robotId);
+  }, [robotId]);
+  const [experiment, setExperiment] = useState<'workbench' | 'balance'>('workbench');
+  const plateRadiusM = experiment === 'balance' ? plateRadiusFor(robot) : null;
+
+  // Scene props: defaults + inventory items, persisted in localStorage
+  const [sceneObjects, setSceneObjects] = useState<SceneObjectSpec[]>(loadSceneObjects);
+  const sceneObjectsRef = useRef(sceneObjects);
+  useEffect(() => {
+    sceneObjectsRef.current = sceneObjects;
+    saveSceneObjects(sceneObjects);
+  }, [sceneObjects]);
+  const [inventoryOpen, setInventoryOpen] = useState(false);
+  // What the viewer draws: the scene, plus the balance ball while that experiment is active
+  const renderedSceneObjects = useMemo(
+    () => (experiment === 'balance' ? [...sceneObjects, balanceBallSpec()] : sceneObjects),
+    [experiment, sceneObjects],
+  );
+
   useEffect(() => {
     if (appView !== 'simulator') return;
     let cancelled = false;
     ensureRapierInitialized().then(() => {
       if (cancelled) return;
       if (!physicsRef.current) {
-        const world = new RoboticsPhysicsWorld(DEFAULT_SCENE_OBJECTS);
+        const world = new RoboticsPhysicsWorld(sceneObjectsRef.current);
         physicsRef.current = world;
         setObjectStates(world.getObjectStates());
       }
@@ -147,12 +195,12 @@ export default function App() {
 
   // Robot state
   const [jointAnglesDeg, setJointAnglesDeg] = useState<JointTuple>(
-    HOME_JOINT_ANGLES_DEG,
+    homeAnglesOf(robotRef.current),
   );
-  const jointAnglesRef = useRef<JointTuple>(HOME_JOINT_ANGLES_DEG);
+  const jointAnglesRef = useRef<JointTuple>(homeAnglesOf(robotRef.current));
 
   const initialFk = useMemo(
-    () => computeForwardKinematics(HOME_JOINT_ANGLES_DEG, AXIS6_ROBOT_CONFIG),
+    () => computeForwardKinematics(homeAnglesOf(robotRef.current), robotRef.current),
     [],
   );
 
@@ -193,18 +241,19 @@ export default function App() {
     const bottleSpec = DEFAULT_SCENE_OBJECTS.find((o) => o.id === 'bottle_flip');
     return computeRobotTelemetry({
       timeSec: 0,
-      jointAnglesDeg: HOME_JOINT_ANGLES_DEG,
-      prevJointAnglesDeg: HOME_JOINT_ANGLES_DEG,
+      jointAnglesDeg: homeAnglesOf(robotRef.current),
+      prevJointAnglesDeg: homeAnglesOf(robotRef.current),
       prevTcpPosition: initialFk.tcpPosition,
       dtSec: 0.08,
       graspedMassKg: 0,
       bottlePosition: bottleSpec?.initialPosition,
       bottleQuaternion: bottleSpec?.initialQuaternion,
+      robot: robotRef.current,
     });
   }, [initialFk.tcpPosition]);
 
   const simTimeRef = useRef(0);
-  const prevJointAnglesRef = useRef<JointTuple>(HOME_JOINT_ANGLES_DEG);
+  const prevJointAnglesRef = useRef<JointTuple>(homeAnglesOf(robotRef.current));
   const prevTcpPosRef = useRef<Vec3Tuple>(initialFk.tcpPosition);
   const telemetryBufferRef = useRef<SimulationTelemetrySample[]>([initialTelemetry]);
   const [telemetrySamples, setTelemetrySamples] = useState<SimulationTelemetrySample[]>([
@@ -246,6 +295,7 @@ export default function App() {
   // Hardware bridge state
   const bridgeRef = useRef<WebSocketRobotBridge | null>(null);
   const [bridgeModalOpen, setBridgeModalOpen] = useState(false);
+  const [trainingOpen, setTrainingOpen] = useState(false);
   const [bridgeState, setBridgeState] =
     useState<BridgeConnectionState>('disconnected');
   const [bridgeProtocol, setBridgeProtocol] = useState<
@@ -260,7 +310,7 @@ export default function App() {
 
   // Compute live FK for UI readouts
   const actualFk = useMemo(
-    () => computeForwardKinematics(jointAnglesDeg, AXIS6_ROBOT_CONFIG),
+    () => computeForwardKinematics(jointAnglesDeg, robotRef.current),
     [jointAnglesDeg],
   );
   const actualEulerDeg = useMemo(
@@ -291,12 +341,12 @@ export default function App() {
 
   const applyJointAngles = useCallback(
     (nextAngles: JointTuple, syncIkTarget = true) => {
-      const clamped = clampJointAnglesDeg(nextAngles, AXIS6_ROBOT_CONFIG);
+      const clamped = clampJointAnglesDeg(nextAngles, robotRef.current);
       jointAnglesRef.current = clamped;
       setJointAnglesDeg(clamped);
 
       if (syncIkTarget) {
-        const fk = computeForwardKinematics(clamped, AXIS6_ROBOT_CONFIG);
+        const fk = computeForwardKinematics(clamped, robotRef.current);
         setIkTargetPos(fk.tcpPosition);
         setIkTargetQuat(fk.tcpQuaternion);
         setIkErrorMm(0);
@@ -310,6 +360,56 @@ export default function App() {
     [],
   );
 
+  // Balance experiment: teleport the plate to `angles` and set the ball on its center
+  const experimentRef = useRef(experiment);
+  experimentRef.current = experiment;
+  const placeBallOnPlate = useCallback((angles: JointTuple) => {
+    const world = physicsRef.current;
+    if (!world) return;
+    const fk = computeForwardKinematics(angles, robotRef.current);
+    world.updateGripperPose(fk.tcpPosition, fk.tcpQuaternion, gripperRef.current.widthMm, true);
+    const pose = ballStartPose(robotRef.current, angles, 0, 0);
+    world.setObjectPose(BALANCE_BALL_ID, pose.position, pose.quaternion);
+  }, []);
+
+  // Mount the right tool / props whenever the experiment or robot changes
+  useEffect(() => {
+    const world = physicsRef.current;
+    if (!world || !physicsReady) return;
+    world.releaseGrasp();
+    const released: GripperState = { ...gripperRef.current, isGrasping: false, graspedObjectId: null };
+    gripperRef.current = released;
+    setGripper(released);
+    if (experiment === 'balance') {
+      world.setPlateTool(plateRadiusFor(robot));
+      world.addObject(balanceBallSpec());
+      const angles = balanceHomeAngles(robot);
+      applyJointAngles(angles, true);
+      placeBallOnPlate(angles);
+    } else {
+      world.setPlateTool(null);
+      world.removeObject(BALANCE_BALL_ID);
+      applyJointAngles(homeAnglesOf(robot), true);
+    }
+    setObjectStates(world.getObjectStates());
+  }, [experiment, robot, physicsReady, applyJointAngles, placeBallOnPlate]);
+
+  const handleResetBall = useCallback(() => {
+    const angles = balanceHomeAngles(robotRef.current);
+    applyJointAngles(angles, true);
+    placeBallOnPlate(angles);
+  }, [applyJointAngles, placeBallOnPlate]);
+
+  /** Switch robot / experiment to what a demo was recorded with (no-op if already matching). */
+  const syncSetupForDemo = useCallback((demo: Demonstration) => {
+    const demoRobot = demo.robotId ?? AXIS6_ROBOT_CONFIG.id;
+    if (demoRobot !== robotRef.current.id) {
+      robotRef.current = getRobotModel(demoRobot);
+      setRobotId(demoRobot);
+    }
+    setExperiment(demo.experiment ?? 'workbench');
+  }, []);
+
   const handleChangeJointAngle = useCallback(
     (jointIndex: number, angleDeg: number) => {
       if (isPlayingDemo) setIsPlayingDemo(false);
@@ -322,7 +422,7 @@ export default function App() {
 
   const handleHomeArm = useCallback(() => {
     setIsPlayingDemo(false);
-    applyJointAngles(HOME_JOINT_ANGLES_DEG, true);
+    applyJointAngles(homeAnglesOf(robotRef.current), true);
   }, [applyJointAngles]);
 
   const handleZeroArm = useCallback(() => {
@@ -338,7 +438,7 @@ export default function App() {
         targetPos,
         targetQuat,
         jointAnglesRef.current,
-        AXIS6_ROBOT_CONFIG,
+        robotRef.current,
       );
       setIkErrorMm(result.positionErrorMeters * 1000);
       setIkConverged(result.converged);
@@ -353,7 +453,7 @@ export default function App() {
       if (mode === 'ik') {
         const fk = computeForwardKinematics(
           jointAnglesRef.current,
-          AXIS6_ROBOT_CONFIG,
+          robotRef.current,
         );
         setIkTargetPos(fk.tcpPosition);
         setIkTargetQuat(fk.tcpQuaternion);
@@ -413,15 +513,15 @@ export default function App() {
       const runtimeObj = physicsRef.current
         ?.getObjectStates()
         .find((s) => s.id === objectId);
-      const spec = DEFAULT_SCENE_OBJECTS.find((o) => o.id === objectId);
+      const spec = sceneObjectsRef.current.find((o) => o.id === objectId);
       const pos = runtimeObj?.position ?? spec?.initialPosition;
       if (!pos) return;
 
       setControlMode('ik');
       setSelectedNodeId('TCP');
       const downQuat = computeForwardKinematics(
-        HOME_JOINT_ANGLES_DEG,
-        AXIS6_ROBOT_CONFIG,
+        homeAnglesOf(robotRef.current),
+        robotRef.current,
       ).tcpQuaternion;
       const hoverY = spec?.kind === 'container' ? 0.16 : pos[1] + 0.12;
       solveAndApplyIk([pos[0], hoverY, pos[2]], downQuat);
@@ -448,8 +548,14 @@ export default function App() {
     };
     gripperRef.current = resetGripper;
     setGripper(resetGripper);
-    applyJointAngles(HOME_JOINT_ANGLES_DEG, true);
-  }, [applyJointAngles]);
+    if (experimentRef.current === 'balance') {
+      const angles = balanceHomeAngles(robotRef.current);
+      applyJointAngles(angles, true);
+      placeBallOnPlate(angles);
+    } else {
+      applyJointAngles(homeAnglesOf(robotRef.current), true);
+    }
+  }, [applyJointAngles, placeBallOnPlate]);
 
   // Recording actions
   const recordSnapshotFrame = useCallback((action: ActionType) => {
@@ -499,6 +605,8 @@ export default function App() {
         updatedAt: new Date().toISOString(),
         durationMs: 0,
         frames: recordingFramesRef.current,
+        robotId: robotRef.current.id,
+        experiment: experimentRef.current,
       });
 
       setDemonstrations((prev) => [newDemo, ...prev]);
@@ -519,13 +627,38 @@ export default function App() {
   }, [isRecording, taskType, recordSnapshotFrame]);
 
   // Playback actions
+  // Live training preview: a transient demo (not saved) that overrides the library selection.
+  // The newest policy is queued and swapped in at the end of each loop so motions are never cut.
+  const [previewDemo, setPreviewDemo] = useState<Demonstration | null>(null);
+  const latestPreviewRef = useRef<Demonstration | null>(null);
+  const previewingRef = useRef(false);
   const activeDemo = useMemo(
-    () => demonstrations.find((d) => d.id === activeDemoId) ?? null,
-    [demonstrations, activeDemoId],
+    () => previewDemo ?? demonstrations.find((d) => d.id === activeDemoId) ?? null,
+    [previewDemo, demonstrations, activeDemoId],
   );
 
+  const handleTrainingPreview = useCallback((demo: Demonstration | null) => {
+    latestPreviewRef.current = demo;
+    if (!demo) {
+      previewingRef.current = false;
+      setPreviewDemo(null);
+      setIsPlayingDemo(false);
+      physicsRef.current?.resetObjects();
+      if (experimentRef.current === 'balance') handleResetBall();
+      return;
+    }
+    // Already previewing: the frame loop swaps in the newest policy at the loop end
+    if (previewingRef.current) return;
+    previewingRef.current = true;
+    syncSetupForDemo(demo);
+    physicsRef.current?.resetObjects();
+    playbackTimeRef.current = 0;
+    setPreviewDemo(demo);
+    setIsPlayingDemo(true);
+  }, [syncSetupForDemo, handleResetBall]);
+
   const applyDemoAtTime = useCallback(
-    (demo: Demonstration, timeMs: number, dtSec = 0.016) => {
+    (demo: Demonstration, timeMs: number) => {
       const interp = interpolateDemoAtTime(demo, timeMs);
       if (!interp) return;
 
@@ -534,7 +667,7 @@ export default function App() {
 
       const fk = computeForwardKinematics(
         interp.jointAnglesDeg,
-        AXIS6_ROBOT_CONFIG,
+        robotRef.current,
       );
       setIkTargetPos(fk.tcpPosition);
       setIkTargetQuat(fk.tcpQuaternion);
@@ -558,8 +691,13 @@ export default function App() {
           fk.tcpPosition,
           fk.tcpQuaternion,
           effectiveWidth,
-          dtSec,
         );
+        // Policy rollouts: show the props exactly as they moved in training (no re-simulation drift)
+        if (demo.replayObjects) {
+          for (const o of interpolateObjectsAtTime(demo, timeMs)) {
+            physicsRef.current.setObjectPose(o.id, o.position, o.quaternion);
+          }
+        }
       }
 
       const nextGripper: GripperState = {
@@ -576,6 +714,7 @@ export default function App() {
 
   const handlePlayDemo = useCallback(() => {
     if (!activeDemo || isRecording) return;
+    syncSetupForDemo(activeDemo);
     if (playbackTimeRef.current >= activeDemo.durationMs - 20) {
       if (physicsRef.current) physicsRef.current.resetObjects();
       bottleFlipArmedRef.current = false;
@@ -588,7 +727,7 @@ export default function App() {
       setBottleUpright(true);
     }
     setIsPlayingDemo(true);
-  }, [activeDemo, isRecording]);
+  }, [activeDemo, isRecording, syncSetupForDemo]);
 
   const handlePauseDemo = useCallback(() => {
     setIsPlayingDemo(false);
@@ -622,6 +761,7 @@ export default function App() {
 
   // Frame loop step (called from R3F SimulationLoopDriver)
   const uiSyncTimerRef = useRef(0);
+  const playbackAccRef = useRef(0);
 
   const handleStepFrame = useCallback(
     (dt: number) => {
@@ -629,21 +769,42 @@ export default function App() {
       if (!physics) return;
 
       // 1. Playback advancement
+      let physicsStepped = false;
       if (isPlayingDemo && activeDemo) {
-        let nextTime = playbackTimeRef.current + dt * 1000 * playbackSpeed;
-        if (nextTime >= activeDemo.durationMs) {
-          if (repeatPlayback) {
+        // Drive the demo on the fixed physics clock: one demo sample per physics step, so fast motions
+        // (the bottle flick) are never skipped between frames and a replay is identical at any frame rate.
+        playbackAccRef.current += Math.min(dt, 0.1);
+        let t = playbackTimeRef.current;
+        while (playbackAccRef.current >= PHYSICS_SUBSTEP_SEC) {
+          playbackAccRef.current -= PHYSICS_SUBSTEP_SEC;
+          t += PHYSICS_SUBSTEP_SEC * 1000 * playbackSpeed;
+          if (t >= activeDemo.durationMs && previewDemo) {
+            // Live training preview always loops; swap in the newest policy at the loop boundary
             physics.resetObjects();
             bottleFlipArmedRef.current = false;
-            nextTime = 0;
-          } else {
-            nextTime = activeDemo.durationMs;
-            setIsPlayingDemo(false);
+            t = 0;
+            const latest = latestPreviewRef.current;
+            if (latest && latest !== previewDemo) {
+              setPreviewDemo(latest);
+              break;
+            }
+          } else if (t >= activeDemo.durationMs) {
+            if (repeatPlayback) {
+              physics.resetObjects();
+              bottleFlipArmedRef.current = false;
+              t = 0;
+            } else {
+              t = activeDemo.durationMs;
+              setIsPlayingDemo(false);
+            }
           }
+          applyDemoAtTime(activeDemo, t);
+          physics.step(PHYSICS_SUBSTEP_SEC);
+          if (t === activeDemo.durationMs) break;
         }
-        playbackTimeRef.current = nextTime;
-        setPlaybackTimeMs(nextTime);
-        applyDemoAtTime(activeDemo, nextTime, dt * playbackSpeed);
+        playbackTimeRef.current = t;
+        setPlaybackTimeMs(t);
+        physicsStepped = true;
       } else {
         // 2. Smooth gripper servo + collision-aware grasp evaluation
         const g = gripperRef.current;
@@ -656,7 +817,7 @@ export default function App() {
 
         const fk = computeForwardKinematics(
           jointAnglesRef.current,
-          AXIS6_ROBOT_CONFIG,
+          robotRef.current,
         );
         const graspRes = physics.evaluateGrasp(
           fk.tcpPosition,
@@ -668,7 +829,6 @@ export default function App() {
           fk.tcpPosition,
           fk.tcpQuaternion,
           graspRes.effectiveWidthMm,
-          dt,
         );
 
         if (
@@ -687,13 +847,8 @@ export default function App() {
         }
       }
 
-      // 3. Step Rapier rigid body physics (sub-stepped for stability on slower frames)
-      let remaining = dt;
-      while (remaining > 0.0001) {
-        const subDt = Math.min(remaining, 0.033);
-        physics.step(subDt);
-        remaining -= subDt;
-      }
+      // 3. Step Rapier rigid body physics (fixed substeps + kinematic interpolation inside step())
+      if (!physicsStepped) physics.step(dt);
 
       // 4. Track bottle flip airborne launch and upright landing
       simTimeRef.current += dt;
@@ -702,9 +857,11 @@ export default function App() {
         ? isBottleUprightOnBench(bottle.position, bottle.quaternion, bottle.linearSpeed)
         : true;
       if (bottle) {
+        // Arm only on a free, airborne bottle: spin alone (a gripper bump, a wobble, or the
+        // flick while still held) used to arm it, and the wobble settling counted as a flip.
         if (
-          (!bottle.isGrasped && bottle.position[1] > 0.115) ||
-          bottle.angularSpeed > 2.2
+          !bottle.isGrasped &&
+          (bottle.position[1] > 0.115 || (bottle.angularSpeed > 2.2 && bottle.position[1] > 0.075))
         ) {
           bottleFlipArmedRef.current = true;
         } else if (bottleFlipArmedRef.current && uprightNow) {
@@ -747,7 +904,7 @@ export default function App() {
         uiSyncTimerRef.current = 0;
 
         const graspedSpec = gripperRef.current.graspedObjectId
-          ? DEFAULT_SCENE_OBJECTS.find(
+          ? sceneObjectsRef.current.find(
               (o) => o.id === gripperRef.current.graspedObjectId,
             )
           : null;
@@ -761,6 +918,7 @@ export default function App() {
           graspedMassKg: graspedSpec?.mass ?? 0,
           bottlePosition: bottle?.position,
           bottleQuaternion: bottle?.quaternion,
+          robot: robotRef.current,
         });
         prevJointAnglesRef.current = [...jointAnglesRef.current] as JointTuple;
         prevTcpPosRef.current = sample.tcpPosition;
@@ -785,6 +943,7 @@ export default function App() {
       isRecording,
       controlMode,
       recordSnapshotFrame,
+      previewDemo,
     ],
   );
 
@@ -938,10 +1097,76 @@ export default function App() {
   const graspedObjectName = useMemo(() => {
     if (!gripper.graspedObjectId) return null;
     return (
-      DEFAULT_SCENE_OBJECTS.find((o) => o.id === gripper.graspedObjectId)
+      sceneObjects.find((o) => o.id === gripper.graspedObjectId)
         ?.name ?? gripper.graspedObjectId
     );
-  }, [gripper.graspedObjectId]);
+  }, [gripper.graspedObjectId, sceneObjects]);
+
+  // Inventory: add / remove props at runtime (physics world + scene list stay in sync)
+  const spawnSpec = useCallback((spec: SceneObjectSpec | null): boolean => {
+    if (!spec) return false;
+    physicsRef.current?.addObject(spec);
+    sceneObjectsRef.current = [...sceneObjectsRef.current, spec];
+    setSceneObjects(sceneObjectsRef.current);
+    setSelectedNodeId(spec.id);
+    if (physicsRef.current) setObjectStates(physicsRef.current.getObjectStates());
+    return true;
+  }, []);
+
+  const handleAddInventoryItem = useCallback(
+    (item: InventoryItem) =>
+      spawnSpec(createSpecFromInventory(item, sceneObjectsRef.current, robotRef.current.maxReachMeters)),
+    [spawnSpec],
+  );
+
+  const handleDuplicateObject = useCallback(
+    (id: string) => {
+      const src = sceneObjectsRef.current.find((o) => o.id === id);
+      return src ? spawnSpec(duplicateSpec(src, sceneObjectsRef.current, robotRef.current.maxReachMeters)) : false;
+    },
+    [spawnSpec],
+  );
+
+  const handleRemoveObject = useCallback((id: string) => {
+    physicsRef.current?.removeObject(id);
+    if (gripperRef.current.graspedObjectId === id) {
+      const released: GripperState = { ...gripperRef.current, isGrasping: false, graspedObjectId: null };
+      gripperRef.current = released;
+      setGripper(released);
+    }
+    sceneObjectsRef.current = sceneObjectsRef.current.filter((o) => o.id !== id);
+    setSceneObjects(sceneObjectsRef.current);
+    setSelectedNodeId((cur) => (cur === id ? null : cur));
+    if (physicsRef.current) setObjectStates(physicsRef.current.getObjectStates());
+  }, []);
+
+  // Delete key removes the selected prop (not while typing in a field)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName))) return;
+      const spec = sceneObjectsRef.current.find((o) => o.id === selectedNodeId);
+      if (spec && spec.kind !== 'container') {
+        e.preventDefault();
+        handleRemoveObject(spec.id);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedNodeId, handleRemoveObject]);
+
+  const handleRestoreDefaultScene = useCallback(() => {
+    const world = physicsRef.current;
+    const defaults = new Set(DEFAULT_SCENE_OBJECTS.map((o) => o.id));
+    for (const o of sceneObjectsRef.current) if (!defaults.has(o.id)) world?.removeObject(o.id);
+    const current = new Set(sceneObjectsRef.current.map((o) => o.id));
+    for (const o of DEFAULT_SCENE_OBJECTS) if (!current.has(o.id)) world?.addObject(o);
+    world?.resetObjects();
+    sceneObjectsRef.current = DEFAULT_SCENE_OBJECTS;
+    setSceneObjects(DEFAULT_SCENE_OBJECTS);
+    if (world) setObjectStates(world.getObjectStates());
+  }, []);
 
   const handleAuthSuccess = useCallback(
     (nextSession: UserSession, nextProfile: UserProfile) => {
@@ -1034,6 +1259,19 @@ export default function App() {
         onExportJSON={handleExportJSON}
         onExportCSV={handleExportCSV}
         onOpenBridgeModal={() => setBridgeModalOpen(true)}
+        onOpenTrainingSandbox={() => setTrainingOpen(true)}
+        robotId={robotId}
+        onSelectRobot={(id) => {
+          setIsPlayingDemo(false);
+          robotRef.current = getRobotModel(id);
+          setRobotId(id);
+        }}
+        experiment={experiment}
+        onSelectExperiment={(exp) => {
+          setIsPlayingDemo(false);
+          setExperiment(exp);
+        }}
+        onResetBall={handleResetBall}
         onOpenFeedbackModal={() => setFeedbackModalOpen(true)}
         onOpenProfileOrAuth={() =>
           profile ? setProfileModalOpen(true) : setAuthModalOpen(true)
@@ -1042,6 +1280,11 @@ export default function App() {
 
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <LeftSidebar
+          sceneObjects={sceneObjects}
+          onOpenInventory={() => setInventoryOpen(true)}
+          onRemoveObject={handleRemoveObject}
+          onDuplicateObject={handleDuplicateObject}
+          robot={robot}
           selectedNodeId={selectedNodeId}
           objectStates={objectStates}
           showJointAxes={showJointAxes}
@@ -1063,6 +1306,10 @@ export default function App() {
         <main className="relative flex-1 min-w-0 h-full">
           <RoboticsViewport
             physicsWorld={physicsRef.current}
+            sceneObjects={renderedSceneObjects}
+            goalMarker={activeDemo?.goal ?? null}
+            robot={robot}
+            plateRadiusM={plateRadiusM}
             jointAnglesDeg={jointAnglesDeg}
             gripperWidthMm={gripper.widthMm}
             isGrasping={gripper.isGrasping}
@@ -1085,6 +1332,7 @@ export default function App() {
         </main>
 
         <RightSidebar
+          robot={robot}
           controlMode={controlMode}
           gizmoMode={gizmoMode}
           jointAnglesDeg={jointAnglesDeg}
@@ -1111,8 +1359,8 @@ export default function App() {
       </div>
 
       <BottomTimelinePanel
-        demonstrations={demonstrations}
-        activeDemoId={activeDemoId}
+        demonstrations={previewDemo ? [previewDemo, ...demonstrations] : demonstrations}
+        activeDemoId={activeDemo?.id ?? null}
         isRecording={isRecording}
         isPlaying={isPlayingDemo}
         repeatPlayback={repeatPlayback}
@@ -1140,6 +1388,25 @@ export default function App() {
         onSelectFrame={setSelectedFrameIndex}
         onUpdateFrameAction={handleUpdateFrameAction}
         onDeleteFrame={handleDeleteFrame}
+      />
+
+      <InventoryModal
+        open={inventoryOpen}
+        onClose={() => setInventoryOpen(false)}
+        onAddItem={handleAddInventoryItem}
+        onRestoreDefaults={handleRestoreDefaultScene}
+      />
+
+      <TrainingSandboxModal
+        open={trainingOpen}
+        onClose={() => setTrainingOpen(false)}
+        onPreview={handleTrainingPreview}
+        robot={robot}
+        onAddDemonstration={(demo) => {
+          setIsPlayingDemo(false);
+          setDemonstrations((prev) => [demo, ...prev]);
+          setActiveDemoId(demo.id);
+        }}
       />
 
       <HardwareBridgeModal

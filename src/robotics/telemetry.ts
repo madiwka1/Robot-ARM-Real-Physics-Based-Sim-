@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { computeForwardKinematics } from './kinematics';
 import { AXIS6_ROBOT_CONFIG } from './robotModel';
-import type { JointTuple, QuatTuple, Vec3Tuple } from './types';
+import type { JointTuple, QuatTuple, RobotModelConfig, Vec3Tuple } from './types';
 
 export interface JointTelemetry {
   id: string;
@@ -32,11 +32,7 @@ export interface SimulationTelemetrySample {
   ];
 }
 
-// Rated joint continuous torque capacities (Nm) and link masses (kg)
-const JOINT_RATED_TORQUE_NM = [48, 56, 36, 16, 14, 8] as const;
-const DOWNSTREAM_MASS_KG = [6.8, 5.2, 3.1, 1.6, 1.1, 0.55] as const;
 const GRAVITY = 9.81;
-const IDLE_CONTROLLER_WATTS = 18.5;
 
 /**
  * Computes physically grounded per-joint holding/dynamic torque and electrical power draw
@@ -51,9 +47,13 @@ export function computeRobotTelemetry(params: {
   graspedMassKg: number;
   bottlePosition?: Vec3Tuple;
   bottleQuaternion?: QuatTuple;
+  /** Robot whose actuators are modelled (rated torque, masses, bus voltage). */
+  robot?: RobotModelConfig;
 }): SimulationTelemetrySample {
+  const robot = params.robot ?? AXIS6_ROBOT_CONFIG;
+  const act = robot.actuators;
   const dt = Math.max(0.008, params.dtSec);
-  const fk = computeForwardKinematics(params.jointAnglesDeg, AXIS6_ROBOT_CONFIG);
+  const fk = computeForwardKinematics(params.jointAnglesDeg, robot);
 
   const tcpPos = fk.tcpPosition;
   const dxTcp = tcpPos[0] - params.prevTcpPosition[0];
@@ -66,7 +66,7 @@ export function computeRobotTelemetry(params: {
   let peakLoad = 0;
 
   for (let i = 0; i < 6; i++) {
-    const spec = AXIS6_ROBOT_CONFIG.joints[i];
+    const spec = robot.joints[i];
     const jointWorld = fk.jointTransforms[i + 1]; // 0 is BASE
     const velDeg =
       (params.jointAnglesDeg[i] - params.prevJointAnglesDeg[i]) / dt;
@@ -79,21 +79,22 @@ export function computeRobotTelemetry(params: {
 
     // Pitch joints (axis Z) bear gravity torque; Yaw/Roll joints bear inertial + friction load
     const isPitchJoint = Math.abs(spec.axis[2]) > 0.5;
-    const effectiveMass = DOWNSTREAM_MASS_KG[i] + params.graspedMassKg;
+    const effectiveMass = act.downstreamMassKg[i] + params.graspedMassKg;
     const gravityTorque = isPitchJoint
       ? effectiveMass * GRAVITY * horizontalMomentArm * 0.65
       : effectiveMass * GRAVITY * 0.04;
 
     const dynamicTorque = Math.abs(velRad) * (1.2 + effectiveMass * 0.35);
     const totalTorqueNm = gravityTorque + dynamicTorque;
-    const rated = JOINT_RATED_TORQUE_NM[i];
+    const rated = act.ratedTorqueNm[i];
     const loadPct = Math.min(100, (totalTorqueNm / rated) * 100);
     if (loadPct > peakLoad) peakLoad = loadPct;
 
     // Electrical power = copper holding loss (k * tau^2) + mechanical shaft power (tau * omega / eff) + servo idle
     const mechanicalWatts = Math.abs(totalTorqueNm * velRad) / 0.82;
-    const holdingCopperWatts = 0.045 * totalTorqueNm * totalTorqueNm;
-    const servoStandbyWatts = 2.4;
+    const holdingCopperWatts = act.copperLossWPerNm2 * totalTorqueNm * totalTorqueNm;
+    // Locked joints (no actuator on 5-DOF arms) draw nothing
+    const servoStandbyWatts = spec.minDeg === spec.maxDeg ? 0 : act.servoStandbyWatts;
     const powerWatts = servoStandbyWatts + holdingCopperWatts + mechanicalWatts;
 
     totalMotorWatts += powerWatts;
@@ -107,8 +108,12 @@ export function computeRobotTelemetry(params: {
     });
   }
 
-  const totalPowerWatts = IDLE_CONTROLLER_WATTS + totalMotorWatts;
-  const busVoltage = Math.max(46.2, 48.0 - totalPowerWatts * 0.0032);
+  const totalPowerWatts = act.controllerIdleWatts + totalMotorWatts;
+  // Supply sags under load (48 V bus: 3.2 mV/W, scaled to the robot's bus), floored at 96.25%
+  const busVoltage = Math.max(
+    act.busVoltage * 0.9625,
+    act.busVoltage - totalPowerWatts * 0.0032 * (act.busVoltage / 48),
+  );
   const busCurrentAmps = totalPowerWatts / busVoltage;
 
   let bottleHeightM = 0.062;

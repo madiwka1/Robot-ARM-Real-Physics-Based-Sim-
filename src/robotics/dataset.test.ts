@@ -5,11 +5,12 @@ import {
   buildSamplePickAndPlaceDemo,
   createDemoFrame,
   interpolateDemoAtTime,
+  interpolateObjectsAtTime,
   serializeDemoToCSV,
   serializeDemoToJSON,
   updateDemoTiming,
 } from './dataset';
-import { HOME_JOINT_ANGLES_DEG } from './robotModel';
+import { AXIS6_ROBOT_CONFIG, HOME_JOINT_ANGLES_DEG } from './robotModel';
 
 test('Sample Pick & Place demo builds valid frames and reaches cube and bin', () => {
   const demo = buildSamplePickAndPlaceDemo();
@@ -28,7 +29,16 @@ test('Sample Pick & Place demo builds valid frames and reaches cube and bin', ()
 test('Sample Bottle Flip demo grasps bottle_flip, executes flick, and releases mid-arc', () => {
   const demo = buildSampleBottleFlipDemo();
   assert.equal(demo.id, 'demo_sample_bottle_flip');
-  assert.equal(demo.durationMs, 4700);
+  assert.equal(demo.durationMs, demo.frames[demo.frames.length - 1].timestampMs);
+  // Realism: no joint may exceed its rated speed between keyframes (1 ms rounding slack)
+  for (let k = 1; k < demo.frames.length; k++) {
+    const a = demo.frames[k - 1], b = demo.frames[k];
+    const dtSec = (b.timestampMs - a.timestampMs + 1) / 1000;
+    AXIS6_ROBOT_CONFIG.joints.forEach((j, i) => {
+      const speed = Math.abs(b.jointAnglesDeg[i] - a.jointAnglesDeg[i]) / dtSec;
+      assert.ok(speed <= j.maxSpeedDegPerSec, `${j.id} ${speed.toFixed(0)} deg/s into ${b.action}`);
+    });
+  }
   const flipFrame = demo.frames.find((f) => f.action === 'Bottle Flip');
   const releaseFrame = demo.frames.find((f) => f.action === 'Open Gripper');
   assert.ok(flipFrame && releaseFrame);
@@ -37,6 +47,23 @@ test('Sample Bottle Flip demo grasps bottle_flip, executes flick, and releases m
   assert.equal(releaseFrame.isGrasping, false);
   assert.equal(releaseFrame.graspedObjectId, null);
   assert.ok(releaseFrame.timestampMs > flipFrame.timestampMs);
+});
+
+test('interpolateObjectsAtTime lerps recorded prop poses between frames', () => {
+  const frame = (t: number, x: number) =>
+    createDemoFrame({
+      timestampMs: t,
+      jointAnglesDeg: HOME_JOINT_ANGLES_DEG,
+      gripperWidthMm: 60,
+      isGrasping: false,
+      graspedObjectId: null,
+      objects: [{ id: 'ball', position: [x, 0.1, 0], quaternion: [0, 0, 0, 1] }],
+      action: 'Idle',
+    });
+  const demo = { ...buildSamplePickAndPlaceDemo(), frames: [frame(0, 0), frame(100, 1)], durationMs: 100 };
+  assert.ok(Math.abs(interpolateObjectsAtTime(demo, 25)[0].position[0] - 0.25) < 1e-9);
+  assert.equal(interpolateObjectsAtTime(demo, 500)[0].position[0], 1);
+  assert.deepEqual(interpolateObjectsAtTime(demo, 50)[0].quaternion, [0, 0, 0, 1]);
 });
 
 test('interpolateDemoAtTime interpolates smoothly between frames', () => {

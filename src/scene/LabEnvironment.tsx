@@ -216,19 +216,57 @@ export const LabWorkbench: React.FC<LabWorkbenchProps> = ({ showGrid }) => {
 
 interface InteractivePhysicsObjectsProps {
   physicsWorld: RoboticsPhysicsWorld | null;
+  /** Current scene (defaults + inventory items); containers are drawn by LabWorkbench. */
+  specs: SceneObjectSpec[];
   selectedObjectId: string | null;
   onSelectObject: (id: string) => void;
+  /** Mouse drag started/ended (the viewport disables orbiting while dragging). */
+  onDragChange: (dragging: boolean) => void;
 }
 
 export const InteractivePhysicsObjects: React.FC<InteractivePhysicsObjectsProps> = ({
   physicsWorld,
+  specs,
   selectedObjectId,
   onSelectObject,
+  onDragChange,
 }) => {
-  const dynamicSpecs = useMemo(
-    () => DEFAULT_SCENE_OBJECTS.filter((o) => o.kind !== 'container'),
+  const dynamicSpecs = useMemo(() => specs.filter((o) => o.kind !== 'container'), [specs]);
+
+  // Mouse drag: ray from the cursor onto the bench plane (y = 0) drives the prop's position
+  const { camera, gl } = useThree();
+  // Default OrbitControls (makeDefault): switched off synchronously on pointer-down, because the
+  // viewport's React state update would only land on the next render and the camera would orbit
+  const controls = useThree((s) => s.controls) as { enabled: boolean } | null;
+  const draggingRef = useRef(false);
+  const drag = useMemo(
+    () => ({ raycaster: new THREE.Raycaster(), plane: new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hit: new THREE.Vector3(), ndc: new THREE.Vector2() }),
     [],
   );
+  useEffect(() => {
+    const el = gl.domElement;
+    const move = (e: PointerEvent) => {
+      if (!draggingRef.current || !physicsWorld) return;
+      const rect = el.getBoundingClientRect();
+      drag.ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+      drag.raycaster.setFromCamera(drag.ndc, camera);
+      if (drag.raycaster.ray.intersectPlane(drag.plane, drag.hit)) physicsWorld.dragTo(drag.hit.x, drag.hit.z);
+    };
+    const up = () => {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      physicsWorld?.endDrag();
+      el.style.cursor = 'auto';
+      if (controls) controls.enabled = true;
+      onDragChange(false);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    return () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+  }, [camera, gl, physicsWorld, drag, onDragChange, controls]);
 
   const meshRefs = useRef<Record<string, THREE.Group | null>>({});
   const shadowRefs = useRef<Record<string, THREE.Mesh | null>>({});
@@ -307,12 +345,16 @@ export const InteractivePhysicsObjects: React.FC<InteractivePhysicsObjectsProps>
               emissiveIntensity={emissiveIntensity}
             />
           </mesh>
-          <mesh position={[0, h * 0.25, 0]} material={ROBOT_MATERIALS.castIronDark}>
-            <cylinderGeometry args={[r + 0.001, r + 0.001, 0.008, 28]} />
-          </mesh>
-          <mesh position={[0, -h * 0.25, 0]} material={ROBOT_MATERIALS.castIronDark}>
-            <cylinderGeometry args={[r + 0.001, r + 0.001, 0.008, 28]} />
-          </mesh>
+          {h > 0.04 && (
+            <>
+              <mesh position={[0, h * 0.25, 0]} material={ROBOT_MATERIALS.castIronDark}>
+                <cylinderGeometry args={[r + 0.001, r + 0.001, 0.008, 28]} />
+              </mesh>
+              <mesh position={[0, -h * 0.25, 0]} material={ROBOT_MATERIALS.castIronDark}>
+                <cylinderGeometry args={[r + 0.001, r + 0.001, 0.008, 28]} />
+              </mesh>
+            </>
+          )}
         </>
       );
     }
@@ -408,6 +450,24 @@ export const InteractivePhysicsObjects: React.FC<InteractivePhysicsObjectsProps>
             onClick={(e) => {
               e.stopPropagation();
               onSelectObject(spec.id);
+            }}
+            onPointerDown={(e) => {
+              if (e.button !== 0) return;
+              e.stopPropagation();
+              onSelectObject(spec.id);
+              if (physicsWorld?.beginDrag(spec.id)) {
+                if (controls) controls.enabled = false;
+                draggingRef.current = true;
+                gl.domElement.style.cursor = 'grabbing';
+                onDragChange(true);
+              }
+            }}
+            onPointerOver={(e) => {
+              e.stopPropagation();
+              if (!draggingRef.current) gl.domElement.style.cursor = 'grab';
+            }}
+            onPointerOut={() => {
+              if (!draggingRef.current) gl.domElement.style.cursor = 'auto';
             }}
           >
             {renderCompositeProp(spec)}

@@ -65,6 +65,31 @@ export interface InterpolatedDemoState {
   frameIndex: number;
 }
 
+/**
+ * Recorded prop poses at `timeMs`: positions lerped between the surrounding frames, rotations
+ * normalized-lerped (fine at 20 Hz frame spacing). Props missing from either frame are skipped.
+ */
+export function interpolateObjectsAtTime(demo: Demonstration, timeMs: number): DemoObjectSnapshot[] {
+  const frames = demo.frames;
+  if (frames.length === 0) return [];
+  let i = 0;
+  while (i < frames.length - 1 && frames[i + 1].timestampMs <= timeMs) i++;
+  const a = frames[i];
+  const b = frames[Math.min(i + 1, frames.length - 1)];
+  const t = b === a ? 0 : Math.min(1, Math.max(0, (timeMs - a.timestampMs) / Math.max(1, b.timestampMs - a.timestampMs)));
+  return a.objects.flatMap((oa) => {
+    const ob = b.objects.find((o) => o.id === oa.id) ?? oa;
+    const sign = oa.quaternion.reduce((s, v, k) => s + v * ob.quaternion[k], 0) < 0 ? -1 : 1;
+    const q = oa.quaternion.map((v, k) => v + (sign * ob.quaternion[k] - v) * t);
+    const n = Math.hypot(...q) || 1;
+    return [{
+      id: oa.id,
+      position: oa.position.map((v, k) => v + (ob.position[k] - v) * t) as Vec3Tuple,
+      quaternion: q.map((v) => v / n) as QuatTuple,
+    }];
+  });
+}
+
 export function interpolateDemoAtTime(
   demo: Demonstration,
   timeMs: number,
@@ -413,144 +438,92 @@ export function buildSampleBottleFlipDemo(): Demonstration {
     AXIS6_ROBOT_CONFIG,
     { maxIterations: 72 },
   );
+  // TCP 0.098 m: palm underside (TCP + 30 mm) clears the 0.124 m bottle cap; at 0.088 it
+  // crushed the bottle into the bench before the grasp.
   const graspIk = solveInverseKinematics(
-    [bottlePos[0], 0.088, bottlePos[2]],
+    [bottlePos[0], 0.098, bottlePos[2]],
     downQuat,
     approachIk.anglesDeg,
     AXIS6_ROBOT_CONFIG,
     { maxIterations: 72 },
   );
-  const windupAngles: JointTuple = [
-    graspIk.anglesDeg[0],
-    graspIk.anglesDeg[1] - 14,
-    graspIk.anglesDeg[2] + 28,
-    0,
-    graspIk.anglesDeg[4] + 26,
-    0,
-  ];
-  const flickMidAngles: JointTuple = [
-    graspIk.anglesDeg[0],
-    graspIk.anglesDeg[1] - 2,
-    graspIk.anglesDeg[2] - 26,
-    0,
-    graspIk.anglesDeg[4] - 58,
-    0,
-  ];
-  const followThroughAngles: JointTuple = [
-    graspIk.anglesDeg[0],
-    graspIk.anglesDeg[1] + 4,
-    graspIk.anglesDeg[2] - 42,
-    0,
-    graspIk.anglesDeg[4] - 85,
-    0,
-  ];
+  // Throw found by a headless Rapier search: an upward toss (release ~0.55 m, ~2.6 m/s up,
+  // ~8.4 rad/s) that turns ~330 deg in the air and lands upright, with no gripper contact after
+  // release and every joint within its rated speed. J2/J3/J5 share the pitch axis, so the flick
+  // moves them together to sum their spin.
+  const offset = (q: JointTuple, d2: number, d3: number, d5: number): JointTuple =>
+    [q[0], q[1] + d2, q[2] + d3, q[3], q[4] + d5, q[5]];
+  const grasp = graspIk.anglesDeg;
+  const lift = offset(grasp, -41.7, -5.2, 31.3);
+  const windup = offset(lift, 11.5, 53.5, 6.9);
+  const flickDelta = [-32.5, -20.5, -44.4] as const;
+  const flick = offset(windup, ...flickDelta);
+  const flickMs = segmentMsWithinSpeedLimits(windup, flick, 1);
+  // Release happens mid-segment while the arm keeps its flick velocity (23.5 ms past the flick
+  // keyframe), then it decelerates at half speed instead of stopping dead under the bottle.
+  const releaseMs = 2 * 23.5;
+  const scaled = (k: number) => flickDelta.map((d) => d * k) as [number, number, number];
+  const followThrough = offset(flick, ...scaled(releaseMs / flickMs));
+  const slowDown = offset(followThrough, ...scaled(120 / flickMs));
 
   const keyframes: Array<{
-    t: number;
+    dt: number;
     angles: JointTuple;
     gripper: number;
     grasping: boolean;
-    graspedId: string | null;
     action: ActionType;
   }> = [
-    {
-      t: 0,
-      angles: HOME_JOINT_ANGLES_DEG,
-      gripper: GRIPPER_DEFAULT_WIDTH_MM,
-      grasping: false,
-      graspedId: null,
-      action: 'Home',
-    },
-    {
-      t: 750,
-      angles: approachIk.anglesDeg,
-      gripper: 74,
-      grasping: false,
-      graspedId: null,
-      action: 'Move Linear',
-    },
-    {
-      t: 1350,
-      angles: graspIk.anglesDeg,
-      gripper: 74,
-      grasping: false,
-      graspedId: null,
-      action: 'Pick Object',
-    },
-    {
-      t: 1750,
-      angles: graspIk.anglesDeg,
-      gripper: 44,
-      grasping: true,
-      graspedId: 'bottle_flip',
-      action: 'Close Gripper',
-    },
-    {
-      t: 2300,
-      angles: windupAngles,
-      gripper: 44,
-      grasping: true,
-      graspedId: 'bottle_flip',
-      action: 'Move Object',
-    },
-    {
-      t: 2520,
-      angles: flickMidAngles,
-      gripper: 44,
-      grasping: true,
-      graspedId: 'bottle_flip',
-      action: 'Bottle Flip',
-    },
-    {
-      t: 2590,
-      angles: followThroughAngles,
-      gripper: 76,
-      grasping: false,
-      graspedId: null,
-      action: 'Open Gripper',
-    },
-    {
-      t: 3800,
-      angles: followThroughAngles,
-      gripper: 76,
-      grasping: false,
-      graspedId: null,
-      action: 'Idle',
-    },
-    {
-      t: 4700,
-      angles: HOME_JOINT_ANGLES_DEG,
-      gripper: GRIPPER_DEFAULT_WIDTH_MM,
-      grasping: false,
-      graspedId: null,
-      action: 'Home',
-    },
+    { dt: 0, angles: HOME_JOINT_ANGLES_DEG, gripper: GRIPPER_DEFAULT_WIDTH_MM, grasping: false, action: 'Home' },
+    { dt: 750, angles: approachIk.anglesDeg, gripper: 74, grasping: false, action: 'Move Linear' },
+    { dt: 600, angles: grasp, gripper: 74, grasping: false, action: 'Pick Object' },
+    { dt: 400, angles: grasp, gripper: 44, grasping: true, action: 'Close Gripper' },
+    { dt: segmentMsWithinSpeedLimits(grasp, lift, 0.6), angles: lift, gripper: 44, grasping: true, action: 'Move Object' },
+    { dt: segmentMsWithinSpeedLimits(lift, windup, 0.6), angles: windup, gripper: 44, grasping: true, action: 'Move Object' },
+    { dt: flickMs, angles: flick, gripper: 44, grasping: true, action: 'Bottle Flip' },
+    { dt: releaseMs, angles: followThrough, gripper: 76, grasping: false, action: 'Open Gripper' },
+    { dt: 240, angles: slowDown, gripper: 76, grasping: false, action: 'Idle' },
+    { dt: 1160, angles: slowDown, gripper: 76, grasping: false, action: 'Idle' },
+    { dt: 900, angles: HOME_JOINT_ANGLES_DEG, gripper: GRIPPER_DEFAULT_WIDTH_MM, grasping: false, action: 'Home' },
   ];
 
-  const frames = keyframes.map((kf) =>
-    createDemoFrame({
-      timestampMs: kf.t,
+  let t = 0;
+  const frames = keyframes.map((kf) => {
+    t += kf.dt;
+    return createDemoFrame({
+      timestampMs: Math.round(t),
       jointAnglesDeg: kf.angles,
       gripperWidthMm: kf.gripper,
       isGrasping: kf.grasping,
-      graspedObjectId: kf.graspedId,
+      graspedObjectId: kf.grasping ? 'bottle_flip' : null,
       objects: baseObjects,
       action: kf.action,
-    }),
-  );
+    });
+  });
 
   return {
     id: 'demo_sample_bottle_flip',
     name: 'Bottle Flip Challenge',
     taskType: 'Bottle Flip',
     createdAt: '2026-11-17T22:00:00.000Z',
-    updatedAt: '2026-11-17T22:00:00.000Z',
-    durationMs: 4700,
+    updatedAt: BOTTLE_FLIP_SEED_VERSION,
+    durationMs: frames[frames.length - 1].timestampMs,
     frames,
   };
 }
 
+/** Shortest segment time (ms, >= 60) in which no joint exceeds `speedFraction` of its rated speed. */
+export function segmentMsWithinSpeedLimits(from: JointTuple, to: JointTuple, speedFraction: number): number {
+  return Math.max(
+    60,
+    ...from.map(
+      (q, i) =>
+        (Math.abs(to[i] - q) / (AXIS6_ROBOT_CONFIG.joints[i].maxSpeedDegPerSec * speedFraction)) * 1000,
+    ),
+  );
+}
+
 const SEEDED_BOTTLE_KEY = 'axislab_seeded_bottle_v1';
+const BOTTLE_FLIP_SEED_VERSION = '2026-11-20T00:00:00.000Z';
 
 export function loadDemonstrationsFromStorage(): Demonstration[] {
   const defaults = () => [buildSampleBottleFlipDemo(), buildSamplePickAndPlaceDemo()];
@@ -573,6 +546,15 @@ export function loadDemonstrationsFromStorage(): Demonstration[] {
       return initial;
     }
     const demos = parsed as Demonstration[];
+    // Upgrade an unedited copy of the old seeded flip (pre-physics-fix choreography that never
+    // landed). Any edit stamps a new updatedAt, so user-modified copies are left alone.
+    const stale = demos.findIndex(
+      (d) => d.id === 'demo_sample_bottle_flip' && d.updatedAt === '2026-11-17T22:00:00.000Z',
+    );
+    if (stale >= 0) {
+      demos[stale] = buildSampleBottleFlipDemo();
+      window.localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(demos));
+    }
     if (
       !window.localStorage.getItem(SEEDED_BOTTLE_KEY) &&
       !demos.some((d) => d.id === 'demo_sample_bottle_flip')

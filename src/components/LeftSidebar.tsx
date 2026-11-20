@@ -4,13 +4,15 @@ import {
   Camera,
   ChevronDown,
   ChevronRight,
+  Copy,
   Crosshair,
   Eye,
   EyeOff,
   Layers,
+  Plus,
+  Trash2,
 } from 'lucide-react';
-import { AXIS6_ROBOT_CONFIG, DEFAULT_SCENE_OBJECTS } from '../robotics/robotModel';
-import type { SceneObjectRuntimeState } from '../robotics/types';
+import type { RobotModelConfig, SceneObjectRuntimeState, SceneObjectSpec } from '../robotics/types';
 import type { CameraPreset } from '../scene/RoboticsViewport';
 
 interface LeftSidebarProps {
@@ -27,9 +29,19 @@ interface LeftSidebarProps {
   onToggleWorkspace: () => void;
   onToggleGrid: () => void;
   onSelectCameraPreset: (preset: CameraPreset) => void;
+  sceneObjects: SceneObjectSpec[];
+  onOpenInventory: () => void;
+  onRemoveObject: (id: string) => void;
+  onDuplicateObject: (id: string) => void;
+  robot: RobotModelConfig;
 }
 
 export const LeftSidebar: React.FC<LeftSidebarProps> = ({
+  sceneObjects,
+  onOpenInventory,
+  onRemoveObject,
+  onDuplicateObject,
+  robot,
   selectedNodeId,
   objectStates,
   showJointAxes,
@@ -47,7 +59,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   const [robotExpanded, setRobotExpanded] = React.useState(true);
   const [objectsExpanded, setObjectsExpanded] = React.useState(true);
 
-  const selectedObjectSpec = DEFAULT_SCENE_OBJECTS.find(
+  const selectedObjectSpec = sceneObjects.find(
     (o) => o.id === selectedNodeId,
   );
   const selectedObjectRuntime = objectStates.find(
@@ -80,7 +92,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             ) : (
               <ChevronRight className="h-3.5 w-3.5 text-slate-400" />
             )}
-            <span>{AXIS6_ROBOT_CONFIG.name}</span>
+            <span>{robot.name}</span>
           </button>
 
           {robotExpanded && (
@@ -100,7 +112,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 </span>
               </button>
 
-              {AXIS6_ROBOT_CONFIG.joints.map((joint) => (
+              {robot.joints.map((joint) => (
                 <button
                   key={joint.id}
                   type="button"
@@ -149,38 +161,59 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             ) : (
               <ChevronRight className="h-3.5 w-3.5 text-slate-400" />
             )}
-            <span>Workbench Objects</span>
+            <span className="flex-1">Workbench Objects</span>
+            <span className="text-[11px] text-slate-500">{sceneObjects.length}</span>
+          </button>
+          <button
+            type="button"
+            onClick={onOpenInventory}
+            aria-label="Open Lab Item Inventory"
+            className="ml-3.5 flex w-[calc(100%-0.875rem)] items-center gap-1.5 rounded border border-dashed border-sky-500/40 px-2 py-0.5 text-left text-xs text-sky-300 hover:bg-sky-500/10 cursor-pointer"
+          >
+            <Plus className="h-3 w-3" /> Add item from inventory
           </button>
 
           {objectsExpanded && (
             <div className="ml-3.5 space-y-0 border-l border-white/10 pl-2">
-              {DEFAULT_SCENE_OBJECTS.map((obj) => {
+              {sceneObjects.map((obj) => {
                 const runtime = objectStates.find((s) => s.id === obj.id);
                 const isSelected = selectedNodeId === obj.id;
                 return (
-                  <button
+                  <div
                     key={obj.id}
-                    type="button"
-                    onClick={() => onSelectNode(obj.id)}
-                    className={`flex w-full items-center justify-between rounded px-2 py-0.5 text-left text-xs cursor-pointer ${
-                      isSelected
-                        ? 'bg-amber-500/15 text-amber-300'
-                        : 'text-slate-300 hover:bg-white/5'
+                    className={`group flex w-full items-center rounded text-xs ${
+                      isSelected ? 'bg-amber-500/15 text-amber-300' : 'text-slate-300 hover:bg-white/5'
                     }`}
                   >
-                    <span className="flex items-center gap-2 truncate">
-                      <span
-                        className="h-2.5 w-2.5 shrink-0 rounded-xs"
-                        style={{ backgroundColor: obj.color }}
-                      />
-                      <span className="truncate">{obj.name}</span>
-                    </span>
-                    {runtime?.isGrasped && (
-                      <span className="text-[11px] text-emerald-400 shrink-0 ml-1">
-                        Held
+                    <button
+                      type="button"
+                      onClick={() => onSelectNode(obj.id)}
+                      className="flex min-w-0 flex-1 items-center justify-between px-2 py-0.5 text-left cursor-pointer"
+                    >
+                      <span className="flex items-center gap-2 truncate">
+                        <span
+                          className="h-2.5 w-2.5 shrink-0 rounded-xs"
+                          style={{ backgroundColor: obj.color }}
+                        />
+                        <span className="truncate">{obj.name}</span>
                       </span>
+                      {runtime?.isGrasped && (
+                        <span className="text-[11px] text-emerald-400 shrink-0 ml-1">
+                          Held
+                        </span>
+                      )}
+                    </button>
+                    {obj.kind !== 'container' && (
+                      <button
+                        type="button"
+                        onClick={() => onRemoveObject(obj.id)}
+                        aria-label={`Remove ${obj.name}`}
+                        className="shrink-0 rounded p-0.5 text-slate-500 opacity-0 hover:text-red-400 group-hover:opacity-100 focus:opacity-100 cursor-pointer"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
                     )}
-                  </button>
+                  </div>
                 );
               })}
             </div>
@@ -237,6 +270,29 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
               ? 'Move Above Tray (IK)'
               : 'Align Gripper Above (IK)'}
           </button>
+          {selectedObjectSpec.kind !== 'container' && (
+            <>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => onDuplicateObject(selectedObjectSpec.id)}
+                  className="flex items-center justify-center gap-1 rounded border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-xs font-medium text-sky-300 hover:bg-sky-500/20 cursor-pointer"
+                >
+                  <Copy className="h-3 w-3" /> Duplicate
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onRemoveObject(selectedObjectSpec.id)}
+                  className="flex items-center justify-center gap-1 rounded border border-red-500/30 bg-red-500/10 px-2 py-1 text-xs font-medium text-red-300 hover:bg-red-500/20 cursor-pointer"
+                >
+                  <Trash2 className="h-3 w-3" /> Delete
+                </button>
+              </div>
+              <p className="text-[11px] leading-snug text-slate-500">
+                Drag it on the bench with the mouse (release while moving to throw) · Del key deletes
+              </p>
+            </>
+          )}
         </div>
       )}
 

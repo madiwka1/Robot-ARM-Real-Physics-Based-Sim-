@@ -4,12 +4,14 @@ import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { TransformControls as ThreeTransformControls } from 'three/addons/controls/TransformControls.js';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
-import type { RoboticsPhysicsWorld } from '../physics/rapierWorld';
+import { PLATE_HALF_THICKNESS_M, type RoboticsPhysicsWorld } from '../physics/rapierWorld';
 import type {
   ControlMode,
   GizmoMode,
   JointTuple,
   QuatTuple,
+  RobotModelConfig,
+  SceneObjectSpec,
   Vec3Tuple,
 } from '../robotics/types';
 import { LabWorkbench, InteractivePhysicsObjects, StudioEnvironmentRig } from './LabEnvironment';
@@ -309,9 +311,50 @@ export interface RoboticsViewportProps {
   onIkTargetDrag: (pos: Vec3Tuple, quat: QuatTuple) => void;
   onSelectEndEffector: () => void;
   onSelectNode: (nodeId: string) => void;
+  sceneObjects: SceneObjectSpec[];
+  /** Training goal to draw (e.g. reach target during a policy preview). */
+  goalMarker: Vec3Tuple | null;
+  robot: RobotModelConfig;
+  /** Balance plate radius when the plate tool is mounted, else null (gripper). */
+  plateRadiusM: number | null;
 }
 
+/** Balance plate: follows the physics plate body (aluminium disc with a rubber top). */
+const PlateToolMesh: React.FC<{ physicsWorld: RoboticsPhysicsWorld | null; radiusM: number }> = ({
+  physicsWorld,
+  radiusM,
+}) => {
+  const ref = useRef<THREE.Group>(null);
+  useFrame(() => {
+    const pose = physicsWorld?.getPlatePose();
+    if (!pose || !ref.current) return;
+    ref.current.position.set(...pose.position);
+    ref.current.quaternion.set(...pose.quaternion);
+  });
+  return (
+    <group ref={ref}>
+      <mesh castShadow receiveShadow>
+        <cylinderGeometry args={[radiusM, radiusM, 2 * PLATE_HALF_THICKNESS_M, 48]} />
+        <meshStandardMaterial color="#cbd5e1" roughness={0.35} metalness={0.7} />
+      </mesh>
+      <mesh position={[0, PLATE_HALF_THICKNESS_M + 0.0005, 0]} receiveShadow>
+        <cylinderGeometry args={[radiusM * 0.97, radiusM * 0.97, 0.001, 48]} />
+        <meshStandardMaterial color="#1e293b" roughness={0.9} />
+      </mesh>
+      {/* Center target ring */}
+      <mesh position={[0, PLATE_HALF_THICKNESS_M + 0.0012, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[radiusM * 0.18, radiusM * 0.21, 40]} />
+        <meshBasicMaterial color="#34d399" />
+      </mesh>
+    </group>
+  );
+};
+
 export const RoboticsViewport: React.FC<RoboticsViewportProps> = ({
+  sceneObjects,
+  goalMarker,
+  robot,
+  plateRadiusM,
   physicsWorld,
   jointAnglesDeg,
   gripperWidthMm,
@@ -334,6 +377,7 @@ export const RoboticsViewport: React.FC<RoboticsViewportProps> = ({
 }) => {
   const orbitRef = useRef<OrbitControlsImpl | null>(null);
   const [gizmoDragging, setGizmoDragging] = useState(false);
+  const [objectDragging, setObjectDragging] = useState(false);
   const [viewportWheelActive, setViewportWheelActive] = useState(false);
   const [contextLost, setContextLost] = useState(false);
 
@@ -395,14 +439,18 @@ export const RoboticsViewport: React.FC<RoboticsViewportProps> = ({
         <CameraRig
           cameraPreset={cameraPreset}
           presetTrigger={presetTrigger}
-          orbitEnabled={!gizmoDragging}
+          orbitEnabled={!gizmoDragging && !objectDragging}
           zoomEnabled={viewportWheelActive}
           orbitRef={orbitRef}
         />
 
         <LabWorkbench showGrid={showGrid} />
 
+        {plateRadiusM !== null && <PlateToolMesh physicsWorld={physicsWorld} radiusM={plateRadiusM} />}
+
         <RobotArmMesh
+          config={robot}
+          showGripper={plateRadiusM === null}
           jointAnglesDeg={jointAnglesDeg}
           gripperWidthMm={gripperWidthMm}
           isGrasping={isGrasping}
@@ -415,9 +463,25 @@ export const RoboticsViewport: React.FC<RoboticsViewportProps> = ({
 
         <InteractivePhysicsObjects
           physicsWorld={physicsWorld}
+          specs={sceneObjects}
           selectedObjectId={selectedNodeId}
           onSelectObject={onSelectNode}
+          onDragChange={setObjectDragging}
         />
+
+        {goalMarker && (
+          <group position={goalMarker}>
+            {/* Training goal + 5 cm success zone */}
+            <mesh>
+              <sphereGeometry args={[0.012, 16, 12]} />
+              <meshBasicMaterial color="#34d399" />
+            </mesh>
+            <mesh>
+              <sphereGeometry args={[0.05, 20, 14]} />
+              <meshBasicMaterial color="#34d399" wireframe transparent opacity={0.25} depthWrite={false} />
+            </mesh>
+          </group>
+        )}
 
         <IkGizmoController
           enabled={controlMode === 'ik'}

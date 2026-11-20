@@ -9,17 +9,14 @@ import {
   RotateCw,
   Sliders,
 } from 'lucide-react';
-import {
-  AXIS6_ROBOT_CONFIG,
-  GRIPPER_MAX_WIDTH_MM,
-  GRIPPER_MIN_WIDTH_MM,
-} from '../robotics/robotModel';
+import { GRIPPER_MAX_WIDTH_MM, GRIPPER_MIN_WIDTH_MM } from '../robotics/robotModel';
 import type { JointTelemetry } from '../robotics/telemetry';
 import type {
   ControlMode,
   GizmoMode,
   GripperState,
   JointTuple,
+  RobotModelConfig,
   Vec3Tuple,
 } from '../robotics/types';
 
@@ -46,9 +43,11 @@ interface RightSidebarProps {
   onChangeGripperWidth: (widthMm: number) => void;
   onOpenGripper: () => void;
   onCloseGripper: () => void;
+  robot: RobotModelConfig;
 }
 
 export const RightSidebar: React.FC<RightSidebarProps> = ({
+  robot,
   controlMode,
   gizmoMode,
   jointAnglesDeg,
@@ -252,7 +251,9 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
         </div>
 
         <div className="space-y-1.5">
-          {AXIS6_ROBOT_CONFIG.joints.map((joint, idx) => {
+          {robot.joints.map((joint, idx) => {
+            // 5-DOF arms: the locked J4 slot has no actuator, so no slider
+            if (joint.minDeg === joint.maxDeg) return null;
             const val = jointAnglesDeg[idx];
             const jTel = jointTelemetry?.[idx];
             const watts = jTel?.powerWatts ?? 2.4;
