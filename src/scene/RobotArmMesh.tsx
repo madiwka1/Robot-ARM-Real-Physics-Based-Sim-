@@ -72,7 +72,9 @@ export const RobotArmMesh: React.FC<RobotArmMeshProps> = (props) =>
       config={props.config}
       jointAnglesDeg={props.jointAnglesDeg}
       gripperWidthMm={props.gripperWidthMm}
+      isGrasping={props.isGrasping}
       showGripper={props.showGripper ?? true}
+      showJointAxes={props.showJointAxes}
       showWorkspace={props.showWorkspace}
       selectedNodeId={props.selectedNodeId}
       onSelectEndEffector={props.onSelectEndEffector}
