@@ -253,7 +253,6 @@ flowchart LR
     ├── main.tsx                       # React DOM entry point
     ├── index.css                      # Tailwind CSS v4 import, scrollbar & slider styles
     ├── assets/images/
-    │   ├── axislab_hero_arm_1794994281866.jpg         # 1376x768 hero studio image
     │   └── axislab_gripper_closeup_1794994281412.jpg  # 1200x896 parallel-jaw grasp close-up
     ├── robotics/
     │   ├── types.ts                   # Core kinematic, object, demonstration, actuator, and bridge TypeScript interfaces
@@ -664,26 +663,21 @@ actions = np.concatenate([act_q_next, act_grip_next], axis=-1)
 
 ## 10. Visual Documentation
 
-The repository includes three verified visual assets showcasing both the live 3D simulation environment and physical workbench context:
+The repository includes two visual assets showcasing the live 3D simulation environment and gripper contact detail:
 
 <table>
   <tr>
-    <td width="50%" align="center">
-      <img src="src/assets/images/axislab_hero_arm_1794994281866.jpg" alt="AxisLab 6 robotic arm workbench studio render" width="100%" />
+    <td align="center">
+      <img src="src/assets/images/axislab_gripper_closeup_1794994281412.jpg" alt="Parallel-jaw gripper close-up grasping weighted bottle" width="60%" />
       <br />
-      <sub><strong>1. Optical Breadboard Studio Scene</strong> (<code>1376×768</code>) — Primary landing hero showing the 6-DOF manipulator above calibration props.</sub>
-    </td>
-    <td width="50%" align="center">
-      <img src="src/assets/images/axislab_gripper_closeup_1794994281412.jpg" alt="Parallel-jaw gripper close-up grasping weighted bottle" width="100%" />
-      <br />
-      <sub><strong>2. Parallel-Jaw Bottle Grasp Detail</strong> (<code>1200×896</code>) — Close-up focus on dual gripper finger contact geometry.</sub>
+      <sub><strong>1. Parallel-Jaw Bottle Grasp Detail</strong> (<code>1200×896</code>) — Close-up focus on dual gripper finger contact geometry.</sub>
     </td>
   </tr>
   <tr>
-    <td colspan="2" align="center">
+    <td align="center">
       <img src="public/media/axislab-simulator-preview.png" alt="Live AxisLab 6 simulator grasping Flip Practice Bottle with telemetry graphs" width="100%" />
       <br />
-      <sub><strong>3. Live Interactive Simulator Workbench</strong> (<code>1600×900</code>) — Active grasp of <code>bottle_flip</code> at <code>2.30s / 4.70s</code> showing J1–J6 sliders, timeline keyframes, and <code>399.2 W</code> power oscilloscope.</sub>
+      <sub><strong>2. Live Interactive Simulator Workbench</strong> (<code>1600×900</code>) — Active grasp of <code>bottle_flip</code> at <code>2.30s / 4.70s</code> showing J1–J6 sliders, timeline keyframes, and <code>399.2 W</code> power oscilloscope.</sub>
     </td>
   </tr>
 </table>

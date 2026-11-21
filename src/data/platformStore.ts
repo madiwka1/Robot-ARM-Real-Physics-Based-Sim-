@@ -13,10 +13,13 @@ export type FeedbackCategory =
 
 export interface UserSession {
   userId: string;
+  /** Empty for local guests (no email is collected). */
   email: string;
   createdAt: string;
+  /** 'local' = guest in this browser; 'supabase' = confirmed cloud account. */
   provider: 'local' | 'supabase';
-  pendingEmailVerification?: boolean;
+  /** Sign-in method reported by Supabase ('email' | 'google'), for display. */
+  authProvider?: string;
 }
 
 export interface UserProfile {
@@ -70,11 +73,15 @@ export const AVATAR_COLOR_OPTIONS: Array<{
 ];
 
 const KEYS = {
-  accounts: 'axislab_accounts_v2',
   session: 'axislab_session_v1',
   profiles: 'axislab_profiles_v1',
-  emails: 'axislab_email_registrations_v1',
   feedback: 'axislab_feedback_v1',
+} as const;
+
+/** Keys written by older versions; purged by purgeLegacyLocalAccounts(). */
+const LEGACY_KEYS = {
+  accounts: 'axislab_accounts_v2',
+  emails: 'axislab_email_registrations_v1',
 } as const;
 
 // In-memory fallback so pure Node unit tests work identically to browser localStorage
@@ -117,6 +124,16 @@ function removeStorage(key: string): void {
 
 export function clearMemoryPlatformStoreForTests(): void {
   memoryStorage.clear();
+}
+
+/** Test hook: raw view of the in-memory store (keys and values). */
+export function dumpMemoryPlatformStoreForTests(): Map<string, string> {
+  return new Map(memoryStorage);
+}
+
+/** Test hook: seed a raw key (e.g. data written by older versions). */
+export function seedMemoryPlatformStoreForTests(key: string, value: string): void {
+  memoryStorage.set(key, value);
 }
 
 function readJsonArray<T>(key: string): T[] {
@@ -237,25 +254,27 @@ export async function hydrateSupabaseSession(): Promise<{
 
     const user = data.session.user;
     const email = (user.email ?? '').toLowerCase();
+    // Email sign-up stores display_name; Google provides full_name / name
+    const meta = user.user_metadata ?? {};
     const metaName =
-      typeof user.user_metadata?.display_name === 'string'
-        ? user.user_metadata.display_name
-        : '';
+      [meta.display_name, meta.full_name, meta.name].find(
+        (v): v is string => typeof v === 'string' && v.trim().length > 0,
+      ) ?? '';
 
     const session: UserSession = {
       userId: user.id,
       email,
       createdAt: user.created_at ?? new Date().toISOString(),
       provider: 'supabase',
-      pendingEmailVerification: false,
+      authProvider: typeof user.app_metadata?.provider === 'string' ? user.app_metadata.provider : undefined,
     };
     writeStorage(KEYS.session, JSON.stringify(session));
 
-    // Fetch remote profile row if present
+    // Fetch the owner's profile row (RLS: only the owner can read it). Email is not stored there.
     const { data: row } = await supabase
       .from('profiles')
       .select(
-        'id, email, display_name, bio, avatar_color, default_control_mode, show_joint_axes_default, updated_at',
+        'id, display_name, bio, avatar_color, default_control_mode, show_joint_axes_default, updated_at',
       )
       .eq('id', user.id)
       .maybeSingle();
@@ -264,7 +283,7 @@ export async function hydrateSupabaseSession(): Promise<{
     const profile: UserProfile = row
       ? {
           userId: row.id,
-          email: (row.email || email).toLowerCase(),
+          email,
           displayName: row.display_name || metaName || email.split('@')[0] || 'Visitor',
           bio: row.bio ?? '',
           avatarColor: (row.avatar_color as AvatarColor) ?? 'amber',
@@ -307,304 +326,133 @@ export function subscribeToSupabaseAuth(
   };
 }
 
-export async function recordPublicEmailRegistration(params: {
+/**
+ * Accounts: 'cloud' when Supabase is configured (email magic link + Google OAuth), otherwise
+ * 'guest' (no account: a random local id, no email collected, everything stays in this browser).
+ *
+ * Privacy model: the email lives only in Supabase Auth (never in a separate table or in
+ * localStorage lists); profiles hold a display name and simulator preferences readable only by
+ * their owner (RLS); a session exists only after Supabase confirms the user; users can delete
+ * their account and all of its data.
+ */
+export type AuthMode = 'cloud' | 'guest';
+
+export function getAuthMode(): AuthMode {
+  return isSupabaseConfigured() ? 'cloud' : 'guest';
+}
+
+function authRedirectUrl(): string | undefined {
+  return typeof window !== 'undefined' ? window.location.origin : undefined;
+}
+
+/**
+ * Send a passwordless sign-in link. Works for new and returning users (Supabase creates the
+ * account on first confirmation). Nothing is stored locally until the link is confirmed.
+ */
+export async function sendEmailSignInLink(params: {
   email: string;
   displayName?: string;
-  source?: string;
-}): Promise<{ ok: true; record: EmailRegistrationRecord } | { ok: false; error: string }> {
+}): Promise<{ ok: true } | { ok: false; error: string }> {
   const email = params.email.trim().toLowerCase();
   if (!validateEmail(email)) {
     return { ok: false, error: 'Please enter a valid email address.' };
   }
-
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    return { ok: false, error: 'Accounts are not connected on this deployment. Continue as a guest instead.' };
+  }
   const displayName = (params.displayName ?? '').trim();
-  const list = readJsonArray<EmailRegistrationRecord>(KEYS.emails);
-  const existing = list.find((item) => item.email === email);
-  const record: EmailRegistrationRecord = existing ?? {
-    id: `reg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+  const { error } = await supabase.auth.signInWithOtp({
     email,
-    displayName,
-    source: params.source ?? 'public_registration',
-    createdAt: new Date().toISOString(),
-  };
-
-  if (!existing) {
-    writeStorage(KEYS.emails, JSON.stringify([record, ...list]));
-  } else if (displayName && !existing.displayName) {
-    const updatedList = list.map((item) =>
-      item.email === email ? { ...item, displayName } : item,
-    );
-    writeStorage(KEYS.emails, JSON.stringify(updatedList));
+    options: {
+      shouldCreateUser: true,
+      emailRedirectTo: authRedirectUrl(),
+      ...(displayName ? { data: { display_name: displayName } } : {}),
+    },
+  });
+  if (error) {
+    const rateLimited = /rate limit|after \d+ second|too many requests/i.test(error.message ?? '');
+    return {
+      ok: false,
+      error: rateLimited
+        ? 'Too many sign-in emails were requested. Please wait a minute and try again.'
+        : error.message || 'Could not send the sign-in link right now.',
+    };
   }
+  return { ok: true };
+}
 
+/** Redirects the browser to Google; the session arrives back via onAuthStateChange. */
+export async function signInWithGoogle(): Promise<{ ok: true } | { ok: false; error: string }> {
   const supabase = getSupabaseClient();
-  if (supabase) {
+  if (!supabase) {
+    return { ok: false, error: 'Google sign-in needs the Supabase connection configured.' };
+  }
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: { redirectTo: authRedirectUrl() },
+  });
+  return error ? { ok: false, error: error.message || 'Google sign-in failed.' } : { ok: true };
+}
+
+function randomId(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  return c?.randomUUID ? c.randomUUID() : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** Local guest profile: no email, no account, nothing leaves this browser. */
+export function startGuestSession(displayName?: string): { session: UserSession; profile: UserProfile } {
+  const userId = `guest_${randomId()}`;
+  const session: UserSession = {
+    userId,
+    email: '',
+    createdAt: new Date().toISOString(),
+    provider: 'local',
+  };
+  const profile = buildDefaultProfile({ userId, email: '', displayName: (displayName ?? '').trim() || 'Guest' });
+  writeStorage(KEYS.session, JSON.stringify(session));
+  saveLocalProfile(profile);
+  return { session, profile };
+}
+
+/**
+ * Delete the signed-in account and its data. Cloud: the `delete_my_account` RPC removes the
+ * auth user; profiles and demonstrations cascade, feedback is anonymized. Guest: local data is
+ * cleared. Either way the local session and profile are removed.
+ */
+export async function deleteAccount(userId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const supabase = getSupabaseClient();
+  if (supabase && !userId.startsWith('guest_')) {
+    const { error } = await supabase.rpc('delete_my_account');
+    if (error) return { ok: false, error: error.message || 'Could not delete the account.' };
     try {
-      await supabase.from('email_registrations').insert({
-        email: record.email,
-        display_name: displayName || record.displayName,
-        source: record.source,
-      });
+      await supabase.auth.signOut();
     } catch {
-      // Ignore duplicate / network errors cleanly since local record is saved
+      // Already gone server-side
     }
   }
-
-  return { ok: true, record };
+  const profiles = readJsonRecord<UserProfile>(KEYS.profiles);
+  delete profiles[userId];
+  writeStorage(KEYS.profiles, JSON.stringify(profiles));
+  writeStorage(
+    KEYS.feedback,
+    JSON.stringify(readJsonArray<FeedbackSubmission>(KEYS.feedback).filter((f) => f.userId !== userId)),
+  );
+  removeStorage(KEYS.session);
+  return { ok: true };
 }
 
-export function listPublicEmailRegistrations(): EmailRegistrationRecord[] {
-  return readJsonArray<EmailRegistrationRecord>(KEYS.emails);
-}
-
-export async function registerUserWithEmail(params: {
-  email: string;
-  displayName: string;
-}): Promise<
-  | {
-      ok: true;
-      session: UserSession;
-      profile: UserProfile;
-      verificationEmailSent: boolean;
-    }
-  | { ok: false; error: string }
-> {
-  const email = params.email.trim().toLowerCase();
-  const displayName = params.displayName.trim();
-
-  if (!validateEmail(email)) {
-    return { ok: false, error: 'Please enter a valid email address.' };
+/**
+ * Remove data older versions kept in localStorage: a plaintext list of every registered email
+ * and password-less "accounts" anyone on the device could sign in to.
+ */
+export function purgeLegacyLocalAccounts(): void {
+  removeStorage(LEGACY_KEYS.accounts);
+  removeStorage(LEGACY_KEYS.emails);
+  const session = getSession();
+  if (session && (session.userId.startsWith('usr_') || session.userId.startsWith('sb_pending_'))) {
+    removeStorage(KEYS.session);
   }
-  if (!validateDisplayName(displayName)) {
-    return { ok: false, error: 'Please enter a display name (at least 2 characters).' };
-  }
-
-  const supabase = getSupabaseClient();
-  if (supabase) {
-    // 1. Store email + display name under public RLS insert policy
-    const publicRes = await recordPublicEmailRegistration({
-      email,
-      displayName,
-      source: 'public_registration',
-    });
-    if (!publicRes.ok) {
-      return publicRes;
-    }
-
-    // 2. Trigger passwordless email OTP / magic link via Supabase Auth
-    const redirectTo =
-      typeof window !== 'undefined' ? window.location.origin : undefined;
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        shouldCreateUser: true,
-        emailRedirectTo: redirectTo,
-        data: {
-          display_name: displayName,
-        },
-      },
-    });
-
-    if (error) {
-      const msg = error.message || '';
-      const isRateLimit = /rate limit|after \d+ second|too many requests/i.test(msg);
-      if (!isRateLimit) {
-        return {
-          ok: false,
-          error: msg || 'Unable to register with Supabase Auth right now.',
-        };
-      }
-      // Public email registration was saved; fall back to local active profile when Supabase SMTP rate-limit is reached
-      const userId = `usr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-      const session: UserSession = {
-        userId,
-        email,
-        createdAt: new Date().toISOString(),
-        provider: 'local',
-        pendingEmailVerification: false,
-      };
-      const profile = buildDefaultProfile({
-        userId,
-        email,
-        displayName,
-      });
-      writeStorage(KEYS.session, JSON.stringify(session));
-      saveLocalProfile(profile);
-      return {
-        ok: true,
-        session,
-        profile,
-        verificationEmailSent: false,
-      };
-    }
-
-    const userId = `sb_pending_${email}`;
-    const session: UserSession = {
-      userId,
-      email,
-      createdAt: new Date().toISOString(),
-      provider: 'supabase',
-      pendingEmailVerification: true,
-    };
-    const profile = buildDefaultProfile({
-      userId,
-      email,
-      displayName,
-    });
-    writeStorage(KEYS.session, JSON.stringify(session));
-    saveLocalProfile(profile);
-
-    return {
-      ok: true,
-      session,
-      profile,
-      verificationEmailSent: true,
-    };
-  }
-
-  // Local persistence mode (mirrors public registration + Supabase profile shape)
-  const accounts = readJsonArray<StoredAccount>(KEYS.accounts);
-  if (accounts.some((acc) => acc.email === email)) {
-    return {
-      ok: false,
-      error: 'This email is already registered. Switch to Sign In to continue.',
-    };
-  }
-
-  const userId = `usr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-  const account: StoredAccount = {
-    userId,
-    email,
-    displayName,
-    createdAt: new Date().toISOString(),
-  };
-  writeStorage(KEYS.accounts, JSON.stringify([account, ...accounts]));
-
-  await recordPublicEmailRegistration({
-    email,
-    displayName,
-    source: 'public_registration',
-  });
-
-  const session: UserSession = {
-    userId,
-    email,
-    createdAt: account.createdAt,
-    provider: 'local',
-    pendingEmailVerification: false,
-  };
-  writeStorage(KEYS.session, JSON.stringify(session));
-
-  const profile = buildDefaultProfile({
-    userId,
-    email,
-    displayName,
-  });
-  saveLocalProfile(profile);
-
-  return {
-    ok: true,
-    session,
-    profile,
-    verificationEmailSent: false,
-  };
-}
-
-export async function signInUserWithEmail(params: {
-  email: string;
-}): Promise<
-  | {
-      ok: true;
-      session: UserSession;
-      profile: UserProfile;
-      verificationEmailSent: boolean;
-    }
-  | { ok: false; error: string }
-> {
-  const email = params.email.trim().toLowerCase();
-  if (!validateEmail(email)) {
-    return { ok: false, error: 'Please enter a valid email address.' };
-  }
-
-  const supabase = getSupabaseClient();
-  if (supabase) {
-    const redirectTo =
-      typeof window !== 'undefined' ? window.location.origin : undefined;
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        shouldCreateUser: false,
-        emailRedirectTo: redirectTo,
-      },
-    });
-    if (error) {
-      return {
-        ok: false,
-        error:
-          error.message ||
-          'Unable to sign in. Make sure this email is registered first.',
-      };
-    }
-
-    const userId = `sb_pending_${email}`;
-    const existing = getProfile(userId);
-    const session: UserSession = {
-      userId,
-      email,
-      createdAt: new Date().toISOString(),
-      provider: 'supabase',
-      pendingEmailVerification: true,
-    };
-    const profile =
-      existing ??
-      buildDefaultProfile({
-        userId,
-        email,
-      });
-    writeStorage(KEYS.session, JSON.stringify(session));
-    saveLocalProfile(profile);
-
-    return {
-      ok: true,
-      session,
-      profile,
-      verificationEmailSent: true,
-    };
-  }
-
-  const accounts = readJsonArray<StoredAccount>(KEYS.accounts);
-  const match = accounts.find((acc) => acc.email === email);
-  if (!match) {
-    return {
-      ok: false,
-      error: 'No registration found for this email. Switch to Register to create one.',
-    };
-  }
-
-  const session: UserSession = {
-    userId: match.userId,
-    email: match.email,
-    createdAt: match.createdAt,
-    provider: 'local',
-    pendingEmailVerification: false,
-  };
-  writeStorage(KEYS.session, JSON.stringify(session));
-
-  const profile =
-    getProfile(match.userId) ??
-    buildDefaultProfile({
-      userId: match.userId,
-      email: match.email,
-      displayName: match.displayName,
-    });
-  saveLocalProfile(profile);
-
-  return {
-    ok: true,
-    session,
-    profile,
-    verificationEmailSent: false,
-  };
 }
 
 export async function updateProfile(
@@ -631,7 +479,6 @@ export async function updateProfile(
       if (data.session?.user?.id === userId) {
         await supabase.from('profiles').upsert({
           id: userId,
-          email: updated.email,
           display_name: updated.displayName,
           bio: updated.bio,
           avatar_color: updated.avatarColor,

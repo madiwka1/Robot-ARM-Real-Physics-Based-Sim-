@@ -21,6 +21,7 @@ import {
   getProfile,
   getSession,
   hydrateSupabaseSession,
+  purgeLegacyLocalAccounts,
   signOutUser,
   subscribeToSupabaseAuth,
   type UserProfile,
@@ -115,6 +116,11 @@ export default function App() {
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
+
+  // Older versions kept plaintext email lists and password-less local "accounts" in localStorage
+  useEffect(() => {
+    purgeLegacyLocalAccounts();
+  }, []);
 
   // Hydrate live Supabase Auth session (if configured)
   useEffect(() => {
@@ -1197,7 +1203,7 @@ export default function App() {
           session={session}
           profile={profile}
           onEnterSimulator={() => setAppView('simulator')}
-          onAuthSuccess={handleAuthSuccess}
+          onOpenAuth={() => setAuthModalOpen(true)}
           onSignOut={handleSignOut}
           onOpenProfileModal={() => setProfileModalOpen(true)}
           onOpenFeedbackModal={() => setFeedbackModalOpen(true)}

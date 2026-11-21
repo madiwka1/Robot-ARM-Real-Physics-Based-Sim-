@@ -1,4 +1,13 @@
+/* Layer order must come before the Tailwind import (Astryx "existing Tailwind app" recipe);
+   below it, the Astryx reset would outrank every utility class. The tailwind-theme.css bridge is
+   deliberately not imported: it remaps rounded-lg / shadow-md etc. that the simulator uses. */
+@layer reset, theme, base, astryx-base, astryx-theme, components, utilities;
+
+@import "@astryxdesign/theme-neutral/fonts.css";
 @import "tailwindcss";
+@import "@astryxdesign/core/reset.css";
+@import "@astryxdesign/core/astryx.css";
+@import "@astryxdesign/theme-neutral/theme.css";
 
 @layer base {
   :root {

@@ -1,715 +1,338 @@
-import React, { useState } from 'react';
-import { ArrowDown, ArrowRight, CheckCircle2, Cpu, MessageSquare, Sliders } from 'lucide-react';
-import {
-  AVATAR_COLOR_OPTIONS,
-  getInitials,
-  isSupabaseConfigured,
-  registerUserWithEmail,
-  signInUserWithEmail,
-  type UserProfile,
-  type UserSession,
-} from '../data/platformStore';
+import React from 'react';
+import { ArrowRight, Github, LogOut, MessageSquare, ShieldCheck, User } from 'lucide-react';
+import { Badge } from '@astryxdesign/core/Badge';
+import { Button } from '@astryxdesign/core/Button';
+import { Card } from '@astryxdesign/core/Card';
+import { HStack, VStack } from '@astryxdesign/core/Stack';
+import { Heading, Text } from '@astryxdesign/core/Text';
+import { getAuthMode, type UserProfile, type UserSession } from '../data/platformStore';
 
-const HERO_IMAGE_SRC = '/src/assets/images/axislab_hero_arm_1794994281866.jpg';
-const GRIPPER_IMAGE_SRC = '/src/assets/images/axislab_gripper_closeup_1794994281412.jpg';
 const SIMULATOR_PREVIEW_SRC = '/media/axislab-simulator-preview.png';
+const REPO_URL = 'https://github.com/madiwka1/Robot-ARM-Real-Physics-Based-Sim-';
 
 interface LandingPageProps {
   session: UserSession | null;
   profile: UserProfile | null;
   onEnterSimulator: () => void;
-  onAuthSuccess: (
-    session: UserSession,
-    profile: UserProfile,
-    verificationEmailSent: boolean,
-  ) => void;
+  onOpenAuth: () => void;
   onSignOut: () => void;
   onOpenProfileModal: () => void;
   onOpenFeedbackModal: () => void;
 }
 
+/* Every figure below is measured; see README §11 "Benchmarking" for method and hardware. */
+const KEY_RESULTS = [
+  { value: '120 Hz', label: 'fixed-step physics', note: 'identical replays at any frame rate' },
+  { value: '0.53 mm', label: 'mean IK error', note: 'Axis-6R, 10³ targets, 100% converged' },
+  { value: '≤ 11', label: 'ARS iterations', note: 'to 100% ball-balance success, 3 robots' },
+  { value: '0.04 ms', label: 'physics step', note: '≈195× real-time headroom' },
+];
+
+const EXPERIMENTS = [
+  {
+    tag: 'Exp. 1',
+    title: 'Bottle Flip',
+    badge: { label: 'dynamic release', variant: 'orange' as const },
+    method: 'Throw found by headless search within rated joint speeds; two-collider ballasted bottle.',
+    result: 'Released at 0.55 m, 2.6 m/s up, 8.4 rad/s; ≈330° in flight, lands upright. 8/8 at ±0.3° joint noise.',
+  },
+  {
+    tag: 'Exp. 2',
+    title: 'Ball Balance',
+    badge: { label: 'closed-loop control', variant: 'green' as const },
+    method: 'Plate end effector; wrist tilt rates as actions. ẍ = 5/7·g·θ, θ̇ = 1.05·a (third-order).',
+    result: 'Linear ARS policy reaches 100% success in 6–11 iterations on Axis-6R, SO-101 and Koch v1.1.',
+  },
+  {
+    tag: 'Exp. 3',
+    title: 'Reach & Pick',
+    badge: { label: 'reinforcement learning', variant: 'blue' as const },
+    method: 'Gymnasium-style env, end-effector Δxyz actions via DLS IK, 5 cm Fetch success threshold.',
+    result: 'Reach: best 62.5–100% success within 100 iterations. Pick & Lift: not yet solvable by a linear policy.',
+  },
+  {
+    tag: 'Exp. 4',
+    title: 'Demonstrations',
+    badge: { label: 'imitation data', variant: 'purple' as const },
+    method: 'Teleoperate by joints or IK gizmo; auto-sampled keyframes with object poses at every frame.',
+    result: 'Exports axislab.demonstration.v1 JSON / 18-column CSV, ready for LeRobot-style training.',
+  },
+];
+
+const ROBOTS = [
+  ['Axis-6R', '6', '0.92 m', '48 V industrial drives', '0.53 mm'],
+  ['SO-101 (LeRobot)', '5', '≈ 0.40 m', '12 V Feetech STS3215', '1.81 mm'],
+  ['Koch v1.1', '5', '≈ 0.30 m', '12 V Dynamixel XL430/XL330', '0.89 mm'],
+];
+
+const EQUATIONS = [
+  {
+    name: 'Damped least-squares IK',
+    eq: '(JᵀJ + λ²I) Δq = Jᵀe,   λ = 0.06 + min(0.12, 0.15‖eₚ‖)',
+  },
+  {
+    name: 'Augmented Random Search update',
+    eq: 'W ← W + α / (b·σ_R) · Σ_top-b (r⁺ₖ − r⁻ₖ) δₖ',
+  },
+  {
+    name: 'Ball on a tilting plate (per axis)',
+    eq: 'ẍ = (5/7) g θ,   θ̇ = ω_max · a,   ω_max = 60°/s',
+  },
+];
+
+/** Section header in a paper style: "§2 Experiments". */
+const SectionTitle: React.FC<{ index: string; title: string; kicker?: string }> = ({ index, title, kicker }) => (
+  <VStack gap={1}>
+    <span className="font-mono-tabular text-xs tracking-widest text-[var(--color-text-accent)]">
+      §{index} {kicker ?? ''}
+    </span>
+    <Heading level={2}>{title}</Heading>
+  </VStack>
+);
+
+const Figure: React.FC<{ src: string; alt: string; caption: string }> = ({ src, alt, caption }) => (
+  <figure className="m-0 overflow-hidden rounded-[var(--radius-container)] border border-[var(--color-border)] bg-[var(--color-background-card)]">
+    <img src={src} alt={alt} className="block h-auto w-full" loading="lazy" />
+    <figcaption className="border-t border-[var(--color-border)] px-4 py-2.5">
+      <Text type="supporting" color="secondary">
+        {caption}
+      </Text>
+    </figcaption>
+  </figure>
+);
+
 export const LandingPage: React.FC<LandingPageProps> = ({
   session,
   profile,
   onEnterSimulator,
-  onAuthSuccess,
+  onOpenAuth,
   onSignOut,
   onOpenProfileModal,
   onOpenFeedbackModal,
 }) => {
-  const [heroImgFailed, setHeroImgFailed] = useState(false);
-  const [simPreviewFailed, setSimPreviewFailed] = useState(false);
-  const [gripperImgFailed, setGripperImgFailed] = useState(false);
-
-  const [authTab, setAuthTab] = useState<'register' | 'signin'>('register');
-  const [email, setEmail] = useState('');
-  const [displayName, setDisplayName] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [statusNotice, setStatusNotice] = useState<string | null>(null);
-
-  const supabaseActive = isSupabaseConfigured();
-
-  const handleAuthSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setFormError(null);
-    setStatusNotice(null);
-    setSubmitting(true);
-    try {
-      if (authTab === 'register') {
-        const res = await registerUserWithEmail({
-          email,
-          displayName,
-        });
-        if (!res.ok) {
-          setFormError(res.error);
-          return;
-        }
-        setStatusNotice(
-          res.verificationEmailSent
-            ? `Registered ${res.session.email}. Check your inbox for the Supabase confirmation link to activate cross-device sync.`
-            : `Registered ${res.session.email} and saved your display profile.`,
-        );
-        onAuthSuccess(res.session, res.profile, res.verificationEmailSent);
-      } else {
-        const res = await signInUserWithEmail({ email });
-        if (!res.ok) {
-          setFormError(res.error);
-          return;
-        }
-        setStatusNotice(
-          res.verificationEmailSent
-            ? `Sign-in link sent to ${res.session.email} via Supabase Auth.`
-            : `Signed in as ${res.profile.displayName}.`,
-        );
-        onAuthSuccess(res.session, res.profile, res.verificationEmailSent);
-      }
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const avatarColorMeta =
-    AVATAR_COLOR_OPTIONS.find((c) => c.id === (profile?.avatarColor ?? 'amber')) ??
-    AVATAR_COLOR_OPTIONS[0];
+  const cloud = getAuthMode() === 'cloud';
 
   return (
-    <div className="min-h-screen bg-[#0d1015] text-[#e6eaf0] overflow-x-hidden">
-      {/* Top Bar: 3-zone contract */}
-      <header className="sticky top-0 z-30 border-b border-white/10 bg-[#0d1015]/95 backdrop-blur-xs">
-        <div className="mx-auto flex h-16 max-w-[1440px] items-center justify-between gap-8 px-6">
-          {/* Zone 1: Single-element brand wordmark */}
-          <a
-            href="#top"
-            className="text-lg font-bold tracking-tight text-slate-100 whitespace-nowrap shrink-0"
-          >
-            AxisLab 6
-          </a>
-
-          {/* Zone 2: Concise single-line section anchor links */}
-          <nav
-            aria-label="Primary Navigation"
-            className="hidden md:flex items-center gap-7 text-sm font-medium text-slate-300"
-          >
-            <a
-              href="#simulator"
-              className="hover:text-white transition-colors whitespace-nowrap shrink-0"
-            >
-              Simulator
+    <div
+      className="min-h-screen bg-[var(--color-background-body)] text-[var(--color-text-primary)]"
+      style={{
+        // Faint engineering-paper grid
+        backgroundImage:
+          'linear-gradient(var(--color-border) 1px, transparent 1px), linear-gradient(90deg, var(--color-border) 1px, transparent 1px)',
+        backgroundSize: '48px 48px',
+        backgroundPosition: '-1px -1px',
+        backgroundAttachment: 'fixed',
+      }}
+    >
+      {/* Top bar */}
+      <header className="sticky top-0 z-30 border-b border-[var(--color-border)] bg-[var(--color-background-body)]/90 backdrop-blur">
+        <nav aria-label="Main" className="flex w-full items-center justify-between gap-4 px-6 py-4 lg:px-12">
+          <HStack gap={3} align="center">
+            <span className="font-mono-tabular text-sm font-semibold tracking-wide">AxisLab 6</span>
+            <Badge label="browser-native robotics lab" variant="neutral" />
+          </HStack>
+          <HStack gap={2} align="center">
+            <a href="#experiments" className="hidden text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] md:inline">
+              Experiments
             </a>
-            <a
-              href="#capabilities"
-              className="hover:text-white transition-colors whitespace-nowrap shrink-0"
-            >
-              Capabilities
+            <a href="#methods" className="hidden px-2 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] md:inline">
+              Methods
             </a>
-            <a
-              href="#register"
-              className="hover:text-white transition-colors whitespace-nowrap shrink-0"
-            >
-              Register
+            <a href="#privacy" className="hidden pr-2 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] md:inline">
+              Privacy
             </a>
-            <button
-              type="button"
-              onClick={onOpenFeedbackModal}
-              className="hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              Feedback
-            </button>
-          </nav>
-
-          {/* Zone 3: Single primary action */}
-          <div className="flex items-center gap-3 shrink-0">
             {session && profile ? (
-              <button
-                type="button"
-                onClick={onOpenProfileModal}
-                aria-label="Customize Profile"
-                className="inline-flex items-center gap-2 rounded-md border border-white/15 bg-[#161b24] px-3 py-1.5 text-xs font-medium text-slate-100 transition-colors hover:bg-[#1e2531] whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <span
-                  className={`flex h-5 w-5 items-center justify-center rounded-sm text-[10px] font-bold ${avatarColorMeta.bgClass} ${avatarColorMeta.textClass}`}
-                >
-                  {getInitials(profile.displayName, profile.email)}
-                </span>
-                <span className="max-w-[120px] truncate">{profile.displayName}</span>
-              </button>
+              <>
+                <Button label={profile.displayName} variant="ghost" icon={<User size={14} />} onClick={onOpenProfileModal} />
+                <Button label="Sign out" variant="ghost" icon={<LogOut size={14} />} onClick={onSignOut} />
+              </>
             ) : (
-              <a
-                href="#register"
-                className="rounded-md bg-amber-500 px-4 py-2 text-xs font-semibold text-slate-950 transition-colors hover:bg-amber-400 whitespace-nowrap shrink-0"
-              >
-                Register
-              </a>
+              <Button label={cloud ? 'Sign in' : 'Continue as guest'} variant="secondary" onClick={onOpenAuth} />
             )}
-          </div>
-        </div>
+            <Button label="Open simulator" variant="primary" icon={<ArrowRight size={14} />} onClick={onEnterSimulator} />
+          </HStack>
+        </nav>
       </header>
 
-      <main id="top">
-        {/* 1. Hero Section */}
-        <section className="mx-auto max-w-[1440px] px-6 pt-10 pb-10 lg:pt-14 lg:pb-12">
-          <div className="grid grid-cols-1 items-stretch gap-10 lg:grid-cols-12">
-            {/* Hero Copy */}
-            <div className="flex flex-col justify-between gap-7 lg:col-span-6">
-              <div className="space-y-4">
-                <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-400">
-                  <span>Open Browser Playground</span>
-                  <span aria-hidden="true">·</span>
-                  <span>6-Axis Robotic Arm</span>
-                  <span aria-hidden="true">·</span>
-                  <span>Rapier3D Physics</span>
-                </div>
-
-                <h1
-                  className="font-bold tracking-tight text-slate-100 [text-wrap:balance]"
-                  style={{ fontSize: 'clamp(2.25rem, 3.6vw, 3.5rem)', lineHeight: 1.08 }}
-                >
-                  Train and test a 6-DOF robotic arm directly in your browser.
-                </h1>
-
-                <p className="max-w-xl text-base leading-relaxed text-slate-300">
-                  AxisLab 6 combines an articulated 6-axis manipulator, rigid-body object grasping,
-                  live motor power telemetry, and JSON/CSV demonstration export—open to everyone
-                  with zero installation required.
-                </p>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-6">
-                <a
-                  href="#simulator"
-                  className="inline-flex items-center gap-2 rounded-md bg-amber-500 px-5 py-2.5 text-sm font-semibold text-slate-950 transition-colors hover:bg-amber-400 whitespace-nowrap"
-                >
-                  <span>Preview Workbench</span>
-                  <ArrowDown className="h-4 w-4" />
-                </a>
-                <button
-                  type="button"
-                  onClick={onEnterSimulator}
-                  className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-300 hover:text-white transition-colors whitespace-nowrap cursor-pointer"
-                >
-                  <span>Open Live Simulator</span>
-                  <ArrowRight className="h-4 w-4 text-slate-400" />
-                </button>
-              </div>
-            </div>
-
-            {/* Hero Visual */}
-            <div className="lg:col-span-6">
-              <div className="h-full min-h-[290px] overflow-hidden rounded-lg border border-white/10 bg-[#12161d]">
-                {!heroImgFailed ? (
-                  <img
-                    src={HERO_IMAGE_SRC}
-                    alt="AxisLab 6 articulated 6-axis robotic arm mounted on an optical breadboard workbench with calibration cubes and test bottle"
-                    referrerPolicy="no-referrer"
-                    onError={() => setHeroImgFailed(true)}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <div className="flex h-full min-h-[300px] flex-col items-center justify-center gap-3 bg-gradient-to-br from-[#141923] to-[#0d1015] p-8 text-center">
-                    <Cpu className="h-10 w-10 text-amber-400" />
-                    <div className="text-sm font-semibold text-slate-200">
-                      Axis-6R Interactive 3D Workspace
-                    </div>
-                    <p className="max-w-xs text-xs text-slate-400">
-                      Scroll down to preview the simulator workbench or launch the interactive lab.
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* 4-column Technical Metric Strip below hero split */}
-          <div
-            id="specifications"
-            className="mt-10 grid grid-cols-2 gap-4 border-t border-b border-white/10 py-6 md:grid-cols-4"
-          >
-            <div className="space-y-1">
-              <div className="font-mono-tabular text-2xl font-semibold text-slate-100">
-                6-DOF
-              </div>
-              <div className="text-xs text-slate-400">
-                Articulated FK & damped least-squares IK
-              </div>
-            </div>
-            <div className="space-y-1">
-              <div className="font-mono-tabular text-2xl font-semibold text-slate-100">
-                48 V Bus
-              </div>
-              <div className="text-xs text-slate-400">
-                Per-joint servo torque & wattage modeling
-              </div>
-            </div>
-            <div className="space-y-1">
-              <div className="font-mono-tabular text-2xl font-semibold text-slate-100">
-                12.5 Hz
-              </div>
-              <div className="text-xs text-slate-400">
-                Real-time power, joint & bottle-flip charts
-              </div>
-            </div>
-            <div className="space-y-1">
-              <div className="font-mono-tabular text-2xl font-semibold text-slate-100">
-                JSON / CSV
-              </div>
-              <div className="text-xs text-slate-400">
-                Timestamped trajectories & object poses
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* 2. Live Simulator Photo Section */}
-        <section
-          id="simulator"
-          aria-label="Interactive Workbench Preview"
-          className="mx-auto max-w-[1440px] px-6 py-10"
-        >
-          <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <div className="text-xs font-medium text-amber-400">
-                Interactive Workbench
-              </div>
-              <h2 className="text-2xl font-semibold tracking-tight text-slate-100 sm:text-3xl">
-                Live 6-DOF Simulator
-              </h2>
-            </div>
-            <button
-              type="button"
-              onClick={onEnterSimulator}
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-400 hover:text-amber-300 transition-colors self-start sm:self-auto whitespace-nowrap cursor-pointer"
-            >
-              <span>Open Live Simulator</span>
-              <ArrowRight className="h-3.5 w-3.5" />
-            </button>
-          </div>
-
-          <div className="overflow-hidden rounded-lg border border-white/10 bg-[#0b0e13] shadow-2xl">
-            {!simPreviewFailed ? (
-              <img
-                src={SIMULATOR_PREVIEW_SRC}
-                alt="AxisLab 6 live 6-DOF robotic arm simulator interface showing the articulated arm holding the flip practice bottle, joint sliders, training timeline, and power telemetry chart"
-                referrerPolicy="no-referrer"
-                onError={() => setSimPreviewFailed(true)}
-                className="aspect-video w-full bg-[#0b0e13] object-cover"
-              />
-            ) : (
-              <div className="flex aspect-video w-full flex-col items-center justify-center gap-3 bg-gradient-to-br from-[#141923] to-[#0d1015] p-8 text-center">
-                <Cpu className="h-10 w-10 text-amber-400" />
-                <div className="text-sm font-semibold text-slate-200">
-                  AxisLab 6 Live Simulator Workbench
-                </div>
-                <p className="max-w-sm text-xs text-slate-400">
-                  Click Open Live Simulator to launch the interactive 3D workbench.
-                </p>
-              </div>
+      <main className="mx-auto max-w-6xl px-6">
+        {/* Hero / abstract */}
+        <section className="max-w-3xl py-20">
+          <VStack gap={5}>
+            <span className="font-mono-tabular text-xs tracking-widest text-[var(--color-text-accent)]">
+              OPEN LAB · RAPIER3D · THREE.JS · REACT 19
+            </span>
+            <Heading level={1} type="display-2">
+              A physics lab for robot arms, running in your browser.
+            </Heading>
+            <Text type="large" color="secondary">
+              Teleoperate real open-source arms, record demonstrations, and train policies with reinforcement
+              learning: deterministic 120 Hz rigid-body physics, measured kinematics, no install.
+            </Text>
+            <HStack gap={3} wrap="wrap">
+              <Button label="Open live simulator" variant="primary" size="lg" icon={<ArrowRight size={16} />} onClick={onEnterSimulator} />
+              {!session && (
+                <Button label={cloud ? 'Sign in with Google or email' : 'Continue as guest'} variant="secondary" size="lg" onClick={onOpenAuth} />
+              )}
+            </HStack>
+            {session && profile && (
+              <Text type="supporting" color="secondary">
+                Signed in as {profile.displayName}
+                {session.provider === 'local' ? ' (guest, data stays in this browser)' : ''}.
+              </Text>
             )}
-          </div>
+          </VStack>
         </section>
 
-        {/* 3. Core Capabilities Bento Grid */}
-        <section id="capabilities" className="mx-auto max-w-[1440px] px-6 py-12">
-          <div className="mb-8 space-y-1.5">
-            <div className="text-xs font-medium text-amber-400">
-              Simulation Architecture
+        {/* Key results */}
+        <section aria-label="Key results" className="grid gap-px overflow-hidden rounded-[var(--radius-container)] border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-2 lg:grid-cols-4">
+          {KEY_RESULTS.map((r) => (
+            <div key={r.label} className="bg-[var(--color-background-card)] p-5">
+              <div className="font-mono-tabular text-3xl font-semibold tabular-nums">{r.value}</div>
+              <Text type="label">{r.label}</Text>
+              <div className="mt-1">
+                <Text type="supporting" color="secondary">
+                  {r.note}
+                </Text>
+              </div>
             </div>
-            <h2 className="text-2xl font-semibold tracking-tight text-slate-100 sm:text-3xl">
-              Built for hands-on kinematics testing and demonstration recording
-            </h2>
-          </div>
-
-          <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
-            {/* Capability 01 */}
-            <article className="flex flex-col justify-between rounded-lg border border-white/10 bg-[#12161d] p-6 lg:col-span-2">
-              <div className="space-y-3">
-                <div className="text-xs font-mono-tabular text-slate-400">01</div>
-                <h3 className="text-lg font-semibold text-slate-100">
-                  Joint Control and 3D Direct End-Effector Manipulation
-                </h3>
-                <p className="max-w-2xl text-sm leading-relaxed text-slate-300">
-                  Drive J1 through J6 individually with degree-accurate sliders or switch to Direct
-                  IK mode to drag and rotate the tool center point (TCP) in 3D space. Monitor
-                  target versus actual position error in millimeters as joints hit reach limits.
-                </p>
-              </div>
-              <div className="mt-6 grid grid-cols-3 gap-4 border-t border-white/10 pt-4 text-xs">
-                <div>
-                  <div className="font-mono-tabular font-semibold text-slate-100">0.92 m</div>
-                  <div className="text-slate-400">Max spherical reach</div>
-                </div>
-                <div>
-                  <div className="font-mono-tabular font-semibold text-slate-100">±180°</div>
-                  <div className="text-slate-400">Wrist & base sweep</div>
-                </div>
-                <div>
-                  <div className="font-mono-tabular font-semibold text-slate-100">0 – 80 mm</div>
-                  <div className="text-slate-400">Parallel-jaw stroke</div>
-                </div>
-              </div>
-            </article>
-
-            {/* Capability 02 with 4:3 photo */}
-            <article className="flex flex-col overflow-hidden rounded-lg border border-white/10 bg-[#12161d] lg:row-span-2">
-              <div className="aspect-[4/3] w-full overflow-hidden border-b border-white/10 bg-[#0b0e13]">
-                {!gripperImgFailed ? (
-                  <img
-                    src={GRIPPER_IMAGE_SRC}
-                    alt="Parallel-jaw robotic gripper holding translucent calibration bottle on optical table"
-                    referrerPolicy="no-referrer"
-                    onError={() => setGripperImgFailed(true)}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <div className="flex h-full items-center justify-center bg-[#0d1015] text-xs text-slate-500">
-                    Parallel-Jaw Grasp View
-                  </div>
-                )}
-              </div>
-              <div className="flex flex-1 flex-col justify-between p-6 space-y-4">
-                <div className="space-y-3">
-                  <div className="text-xs font-mono-tabular text-slate-400">02</div>
-                  <h3 className="text-lg font-semibold text-slate-100">
-                    Rigid-Body Grasping and Weighted Bottle Flip Physics
-                  </h3>
-                  <p className="text-sm leading-relaxed text-slate-300">
-                    Rapier3D simulates object mass, surface friction, and inherited linear/angular
-                    release velocity. Practice precision pick-and-place or test dynamic wrist-flick
-                    launches with an asymmetrically weighted test bottle.
-                  </p>
-                </div>
-                <div className="border-t border-white/10 pt-3 text-xs text-slate-400">
-                  Cubes · Cylinders · Spheres · Weighted Bottle · Receiving Tray
-                </div>
-              </div>
-            </article>
-
-            {/* Capability 03 */}
-            <article className="flex flex-col justify-between rounded-lg border border-white/10 bg-[#12161d] p-6">
-              <div className="space-y-3">
-                <div className="text-xs font-mono-tabular text-slate-400">03</div>
-                <h3 className="text-lg font-semibold text-slate-100">
-                  Demonstration Timeline and Dataset Export
-                </h3>
-                <p className="text-sm leading-relaxed text-slate-300">
-                  Record keyframes automatically while teleoperating, scrub and relabel action
-                  steps, loop playback at 0.5x–2.0x speed, and export structured JSON or CSV logs.
-                </p>
-              </div>
-              <div className="mt-5 border-t border-white/10 pt-3 text-xs font-mono-tabular text-slate-400">
-                Includes joint angles · TCP pose · gripper width · object snapshots
-              </div>
-            </article>
-
-            {/* Capability 04 */}
-            <article className="flex flex-col justify-between rounded-lg border border-white/10 bg-[#12161d] p-6">
-              <div className="space-y-3">
-                <div className="text-xs font-mono-tabular text-slate-400">04</div>
-                <h3 className="text-lg font-semibold text-slate-100">
-                  ROS 2 Hardware Bridge and Supabase Sync
-                </h3>
-                <p className="text-sm leading-relaxed text-slate-300">
-                  Stream joint commands to rosbridge_suite over WebSocket while saving public
-                  registrations, display profiles, and feedback through Supabase.
-                </p>
-              </div>
-              <div className="mt-5 border-t border-white/10 pt-3 text-xs font-mono-tabular text-slate-400">
-                ws://localhost:9090 · Supabase Auth & RLS · Profile defaults
-              </div>
-            </article>
-          </div>
+          ))}
         </section>
 
-        {/* 4. Public Registration Section */}
-        <section
-          id="register"
-          className="mx-auto max-w-[1440px] px-6 py-12 border-t border-white/10"
-        >
-          <div className="grid grid-cols-1 gap-10 lg:grid-cols-12">
-            {/* Left Explanation */}
-            <div className="space-y-5 lg:col-span-5">
-              <div className="text-xs font-medium text-amber-400">
-                Open to Everyone
-              </div>
-              <h2 className="text-2xl font-semibold tracking-tight text-slate-100 sm:text-3xl">
-                Register with your email and display name
-              </h2>
-              <p className="text-sm leading-relaxed text-slate-300">
-                AxisLab 6 is open to the general public—students, makers, hobbyists, researchers,
-                and anyone curious to try a robotic arm. Enter just your email address and display
-                name to save your profile preferences.
-              </p>
-
-              <ul className="space-y-3 border-t border-white/10 pt-5 text-sm text-slate-300">
-                <li className="flex items-start gap-2.5">
-                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-                  <span>
-                    Quick public registration powered by Supabase Auth and our public email policy.
-                  </span>
-                </li>
-                <li className="flex items-start gap-2.5">
-                  <Sliders className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
-                  <span>
-                    Customize your avatar, display name, and preferred simulator control mode.
-                  </span>
-                </li>
-                <li className="flex items-start gap-2.5">
-                  <MessageSquare className="mt-0.5 h-4 w-4 shrink-0 text-sky-400" />
-                  <span>
-                    Share feedback anytime from the Feedback menu in the header or workbench.
-                  </span>
-                </li>
-              </ul>
+        {/* Experiments */}
+        <section id="experiments" className="scroll-mt-20 py-16">
+          <VStack gap={6}>
+            <SectionTitle index="1" kicker="EXPERIMENTS" title="Four experiments, one workbench" />
+            <div className="grid gap-4 md:grid-cols-2">
+              {EXPERIMENTS.map((e) => (
+                <Card key={e.title} padding={5}>
+                  <VStack gap={3}>
+                    <HStack gap={2} align="center" justify="between">
+                      <span className="font-mono-tabular text-xs text-[var(--color-text-secondary)]">{e.tag}</span>
+                      <Badge label={e.badge.label} variant={e.badge.variant} />
+                    </HStack>
+                    <Heading level={3}>{e.title}</Heading>
+                    <Text color="secondary">
+                      <strong className="text-[var(--color-text-primary)]">Method.</strong> {e.method}
+                    </Text>
+                    <Text color="secondary">
+                      <strong className="text-[var(--color-text-primary)]">Result.</strong> {e.result}
+                    </Text>
+                  </VStack>
+                </Card>
+              ))}
             </div>
+            <Figure
+              src={SIMULATOR_PREVIEW_SRC}
+              alt="Simulator workbench with joint sliders, demonstration timeline, and power telemetry graph"
+              caption="Fig. 1 — The live workbench: joint control, demonstration timeline, and per-joint power telemetry."
+            />
+          </VStack>
+        </section>
 
-            {/* Right Interactive Registration / Account Card */}
-            <div className="lg:col-span-7">
-              <div className="rounded-lg border border-white/10 bg-[#12161d] p-6 sm:p-8">
-                {session && profile ? (
-                  <div className="space-y-6">
-                    <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-5">
-                      <div className="flex items-center gap-3.5">
-                        <div
-                          className={`flex h-12 w-12 items-center justify-center rounded-lg text-sm font-bold ${avatarColorMeta.bgClass} ${avatarColorMeta.textClass}`}
-                        >
-                          {getInitials(profile.displayName, profile.email)}
-                        </div>
-                        <div>
-                          <div className="text-base font-semibold text-slate-100">
-                            {profile.displayName}
-                          </div>
-                          <div className="font-mono-tabular text-xs text-slate-400">
-                            {profile.email}
-                          </div>
-                        </div>
-                      </div>
-                      <span className="text-xs font-medium text-emerald-400">
-                        {session.pendingEmailVerification ? 'Verification Email Sent' : 'Registered'}
-                      </span>
-                    </div>
-
-                    {statusNotice && (
-                      <div className="rounded border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-xs text-emerald-200">
-                        {statusNotice}
-                      </div>
-                    )}
-
-                    {profile.bio && (
-                      <p className="text-xs leading-relaxed text-slate-300">
-                        {profile.bio}
-                      </p>
-                    )}
-
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 text-xs">
-                      <div className="rounded border border-white/10 bg-[#0d1015] p-3">
-                        <div className="text-slate-400">Default Mode</div>
-                        <div className="mt-1 font-medium text-slate-100">
-                          {profile.defaultControlMode === 'ik'
-                            ? 'Direct IK Manipulation'
-                            : 'Joint Control (J1–J6)'}
-                        </div>
-                      </div>
-                      <div className="rounded border border-white/10 bg-[#0d1015] p-3">
-                        <div className="text-slate-400">Joint Axes Overlay</div>
-                        <div className="mt-1 font-medium text-slate-100">
-                          {profile.showJointAxesDefault ? 'Enabled on Start' : 'Hidden on Start'}
-                        </div>
-                      </div>
-                      <div className="rounded border border-white/10 bg-[#0d1015] p-3">
-                        <div className="text-slate-400">Storage Backend</div>
-                        <div className="mt-1 font-medium text-slate-100">
-                          {supabaseActive ? 'Supabase Auth + DB' : 'Local Store (Supabase Ready)'}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-3 pt-1">
-                      <button
-                        type="button"
-                        onClick={onEnterSimulator}
-                        className="inline-flex items-center gap-2 rounded-md bg-amber-500 px-5 py-2.5 text-xs font-semibold text-slate-950 transition-colors hover:bg-amber-400 whitespace-nowrap cursor-pointer"
-                      >
-                        <span>Open Live Simulator</span>
-                        <ArrowRight className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={onOpenProfileModal}
-                        className="rounded-md border border-white/10 bg-[#1a202b] px-4 py-2.5 text-xs font-medium text-slate-200 transition-colors hover:bg-[#232b3a] whitespace-nowrap cursor-pointer"
-                      >
-                        Customize Profile
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setStatusNotice(null);
-                          onSignOut();
-                        }}
-                        className="ml-auto rounded-md px-3 py-2 text-xs font-medium text-slate-400 hover:text-slate-200 whitespace-nowrap cursor-pointer"
-                      >
-                        Sign Out
-                      </button>
-                    </div>
+        {/* Methods */}
+        <section id="methods" className="scroll-mt-20 pb-16">
+          <VStack gap={6}>
+            <SectionTitle index="2" kicker="METHODS" title="Models and measurements" />
+            <div className="grid gap-4 lg:grid-cols-[1fr_1.2fr]">
+              <Card padding={5}>
+                <VStack gap={4}>
+                  <Heading level={3}>Governing equations</Heading>
+                  {EQUATIONS.map((q) => (
+                    <VStack key={q.name} gap={1}>
+                      <Text type="label">{q.name}</Text>
+                      <code className="block overflow-x-auto rounded-[var(--radius-element)] bg-[var(--color-background-muted)] px-3 py-2 font-mono-tabular text-sm">
+                        {q.eq}
+                      </code>
+                    </VStack>
+                  ))}
+                </VStack>
+              </Card>
+              <Card padding={5}>
+                <VStack gap={4}>
+                  <Heading level={3}>Robot models</Heading>
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse text-left text-sm">
+                      <thead>
+                        <tr className="border-b border-[var(--color-border)] text-[var(--color-text-secondary)]">
+                          {['Robot', 'DOF', 'Reach', 'Actuators', 'IK error (mean)'].map((h) => (
+                            <th key={h} scope="col" className="py-2 pr-3 font-medium">
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="font-mono-tabular tabular-nums">
+                        {ROBOTS.map((r) => (
+                          <tr key={r[0]} className="border-b border-[var(--color-border)] last:border-0">
+                            {r.map((cell, i) => (
+                              <td key={i} className={`py-2 pr-3 ${i === 0 ? 'font-sans font-medium' : i === 3 ? '' : 'whitespace-nowrap'}`}>
+                                {cell}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
-                ) : (
-                  <form onSubmit={handleAuthSubmit} className="space-y-4" noValidate>
-                    <div className="flex items-center justify-between border-b border-white/10 pb-4">
-                      <div className="flex items-center gap-1 rounded bg-[#0d1015] p-1 border border-white/10">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAuthTab('register');
-                            setFormError(null);
-                          }}
-                          className={`rounded px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
-                            authTab === 'register'
-                              ? 'bg-amber-500 text-slate-950'
-                              : 'text-slate-300 hover:text-white'
-                          }`}
-                        >
-                          Register
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAuthTab('signin');
-                            setFormError(null);
-                          }}
-                          className={`rounded px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
-                            authTab === 'signin'
-                              ? 'bg-amber-500 text-slate-950'
-                              : 'text-slate-300 hover:text-white'
-                          }`}
-                        >
-                          Sign In
-                        </button>
-                      </div>
-                      <span className="text-xs text-slate-400">
-                        {supabaseActive ? 'Supabase Connected' : 'Public Registration'}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-4">
-                      <label className="block space-y-1.5">
-                        <span className="block text-xs font-medium text-slate-300">
-                          Email Address
-                        </span>
-                        <input
-                          type="email"
-                          required
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                          placeholder="you@example.com"
-                          className="w-full rounded-md border border-white/15 bg-[#0d1015] px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
-                        />
-                      </label>
-
-                      {authTab === 'register' && (
-                        <label className="block space-y-1.5">
-                          <span className="block text-xs font-medium text-slate-300">
-                            Display Name
-                          </span>
-                          <input
-                            type="text"
-                            required
-                            value={displayName}
-                            onChange={(e) => setDisplayName(e.target.value)}
-                            placeholder="Alex Rivera"
-                            className="w-full rounded-md border border-white/15 bg-[#0d1015] px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
-                          />
-                        </label>
-                      )}
-                    </div>
-
-                    {formError && (
-                      <div
-                        role="alert"
-                        className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300"
-                      >
-                        {formError}
-                      </div>
-                    )}
-
-                    <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-                      <span className="text-xs text-slate-400">
-                        {supabaseActive
-                          ? 'Stores your email via Supabase and sends a sign-in link.'
-                          : 'Open to everyone — only your email and display name are needed.'}
-                      </span>
-                      <button
-                        type="submit"
-                        disabled={submitting}
-                        className="rounded-md bg-amber-500 px-5 py-2.5 text-xs font-semibold text-slate-950 transition-colors hover:bg-amber-400 disabled:opacity-50 whitespace-nowrap cursor-pointer"
-                      >
-                        {submitting
-                          ? 'Saving...'
-                          : authTab === 'register'
-                            ? 'Register with Email'
-                            : 'Sign In with Email'}
-                      </button>
-                    </div>
-                  </form>
-                )}
-              </div>
+                  <Text type="supporting" color="secondary">
+                    Link lengths from the published SO-ARM100 and Koch v1.1 URDFs. Measured with Node 24 on a
+                    Ryzen 7 7730U; full method in the README.
+                  </Text>
+                </VStack>
+              </Card>
             </div>
-          </div>
+          </VStack>
+        </section>
+
+        {/* Privacy */}
+        <section id="privacy" className="scroll-mt-20 pb-16">
+          <VStack gap={6}>
+            <SectionTitle index="3" kicker="PRIVACY" title="What we store, and what we don't" />
+            <div className="grid gap-4 md:grid-cols-3">
+              <Card padding={5}>
+                <VStack gap={2}>
+                  <HStack gap={2} align="center">
+                    <ShieldCheck size={16} className="text-[var(--color-text-accent)]" />
+                    <Heading level={3}>Sign-in</Heading>
+                  </HStack>
+                  <Text color="secondary">
+                    Google or a one-time email link, with no passwords. Your email is held only by the sign-in provider
+                    (Supabase Auth) and is never copied into app tables, shown to others, or used for marketing.
+                  </Text>
+                </VStack>
+              </Card>
+              <Card padding={5}>
+                <VStack gap={2}>
+                  <Heading level={3}>Your data</Heading>
+                  <Text color="secondary">
+                    A display name, simulator preferences, and work you choose to save. Row-level security means only
+                    you can read your rows. Guest mode stores nothing outside this browser.
+                  </Text>
+                </VStack>
+              </Card>
+              <Card padding={5}>
+                <VStack gap={2}>
+                  <Heading level={3}>Your control</Heading>
+                  <Text color="secondary">
+                    Delete your account at any time from your profile; your profile and saved demonstrations are
+                    erased and any feedback you sent is anonymized.
+                  </Text>
+                </VStack>
+              </Card>
+            </div>
+          </VStack>
         </section>
       </main>
 
-      {/* Quiet Footer */}
-      <footer className="border-t border-white/10 bg-[#0b0e13]">
-        <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-4 px-6 py-6 text-xs text-slate-400">
-          <div className="flex items-center gap-3">
-            <span className="font-semibold text-slate-200">AxisLab 6</span>
-            <span aria-hidden="true">·</span>
-            <span>
-              {supabaseActive
-                ? 'Supabase Connected'
-                : 'Supabase Schema Ready (Local Persistence Active)'}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-6">
-            <a href="#top" className="hover:text-slate-200 transition-colors">
-              Top
-            </a>
-            <a href="#simulator" className="hover:text-slate-200 transition-colors">
-              Simulator
-            </a>
-            <a href="#capabilities" className="hover:text-slate-200 transition-colors">
-              Capabilities
-            </a>
-            <a href="#register" className="hover:text-slate-200 transition-colors">
-              Register
-            </a>
-            <button
-              type="button"
-              onClick={onOpenFeedbackModal}
-              className="hover:text-slate-200 transition-colors cursor-pointer"
-            >
-              Feedback
-            </button>
-          </div>
+      <footer className="border-t border-[var(--color-border)]">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-6 py-6">
+          <Text type="supporting" color="secondary">
+            AxisLab 6 · Rapier3D physics · Astryx design system
+          </Text>
+          <HStack gap={2}>
+            <Button label="Feedback" variant="ghost" icon={<MessageSquare size={14} />} onClick={onOpenFeedbackModal} />
+            <Button label="Source on GitHub" variant="ghost" icon={<Github size={14} />} href={REPO_URL} />
+          </HStack>
         </div>
       </footer>
     </div>

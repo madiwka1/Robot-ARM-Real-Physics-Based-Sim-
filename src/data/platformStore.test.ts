@@ -2,15 +2,19 @@ import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   clearMemoryPlatformStoreForTests,
+  deleteAccount,
+  dumpMemoryPlatformStoreForTests,
+  getAuthMode,
   getInitials,
   getProfile,
   getSession,
   listFeedback,
-  listPublicEmailRegistrations,
-  recordPublicEmailRegistration,
-  registerUserWithEmail,
-  signInUserWithEmail,
+  purgeLegacyLocalAccounts,
+  seedMemoryPlatformStoreForTests,
+  sendEmailSignInLink,
+  signInWithGoogle,
   signOutUser,
+  startGuestSession,
   submitFeedback,
   updateProfile,
   validateDisplayName,
@@ -21,7 +25,7 @@ beforeEach(() => {
   clearMemoryPlatformStoreForTests();
 });
 
-test('validateEmail and validateDisplayName enforce public registration input rules', () => {
+test('validateEmail and validateDisplayName enforce input rules', () => {
   assert.equal(validateEmail('visitor@example.com'), true);
   assert.equal(validateEmail('not-an-email'), false);
   assert.equal(validateDisplayName('Alex Rivera'), true);
@@ -29,69 +33,37 @@ test('validateEmail and validateDisplayName enforce public registration input ru
   assert.equal(validateDisplayName('   '), false);
 });
 
-test('registerUserWithEmail registers public user with only email and display name', async () => {
-  const missingName = await registerUserWithEmail({
-    email: 'alex@example.com',
-    displayName: ' ',
-  });
-  assert.equal(missingName.ok, false);
+test('without a backend the app runs in guest mode and never stores an email', async () => {
+  assert.equal(getAuthMode(), 'guest');
 
-  const res = await registerUserWithEmail({
-    email: 'Alex@Example.com',
-    displayName: 'Alex Rivera',
-  });
-
-  assert.equal(res.ok, true);
-  if (!res.ok) return;
-
-  assert.equal(res.session.email, 'alex@example.com');
-  assert.equal(res.profile.displayName, 'Alex Rivera');
-  assert.equal('roleTitle' in res.profile, false);
-  assert.equal(getSession()?.userId, res.session.userId);
-  assert.equal(getProfile(res.session.userId)?.displayName, 'Alex Rivera');
-
-  const emails = listPublicEmailRegistrations();
-  assert.equal(emails.length, 1);
-  assert.equal(emails[0].email, 'alex@example.com');
-  assert.equal(emails[0].displayName, 'Alex Rivera');
-
-  // Duplicate signup is rejected cleanly
-  const dup = await registerUserWithEmail({
-    email: 'alex@example.com',
-    displayName: 'Alex Rivera',
-  });
-  assert.equal(dup.ok, false);
-});
-
-test('signInUserWithEmail signs in registered public email and rejects unknown email', async () => {
-  await registerUserWithEmail({
-    email: 'sam@example.com',
-    displayName: 'Sam Lee',
-  });
-  await signOutUser();
+  // Cloud sign-in paths refuse cleanly and leave nothing behind
+  const link = await sendEmailSignInLink({ email: 'alex@example.com', displayName: 'Alex' });
+  assert.equal(link.ok, false);
+  assert.equal((await signInWithGoogle()).ok, false);
   assert.equal(getSession(), null);
 
-  const missing = await signInUserWithEmail({
-    email: 'nobody@example.com',
-  });
-  assert.equal(missing.ok, false);
+  const { session, profile } = startGuestSession('Alex Rivera');
+  assert.equal(session.provider, 'local');
+  assert.equal(session.email, '');
+  assert.ok(session.userId.startsWith('guest_'));
+  assert.equal(profile.displayName, 'Alex Rivera');
+  assert.equal(getSession()?.userId, session.userId);
 
-  const good = await signInUserWithEmail({
-    email: 'sam@example.com',
-  });
-  assert.equal(good.ok, true);
-  assert.equal(getSession()?.email, 'sam@example.com');
+  const stored = [...dumpMemoryPlatformStoreForTests().values()].join('\n');
+  assert.equal(/@/.test(stored), false, 'no email address anywhere in local storage');
+
+  await signOutUser();
+  assert.equal(getSession(), null);
+});
+
+test('sendEmailSignInLink validates the address before anything else', async () => {
+  const res = await sendEmailSignInLink({ email: 'not-an-email' });
+  assert.deepEqual(res, { ok: false, error: 'Please enter a valid email address.' });
 });
 
 test('updateProfile persists display name, bio, avatar color, and simulator defaults', async () => {
-  const res = await registerUserWithEmail({
-    email: 'custom@example.com',
-    displayName: 'Initial Name',
-  });
-  assert.equal(res.ok, true);
-  if (!res.ok) return;
-
-  const updated = await updateProfile(res.session.userId, {
+  const { session } = startGuestSession('Initial Name');
+  const updated = await updateProfile(session.userId, {
     displayName: 'Kenji Sato',
     avatarColor: 'sky',
     defaultControlMode: 'ik',
@@ -134,16 +106,51 @@ test('submitFeedback validates message and persists structured feedback', async 
   assert.equal(all[0].category, 'Physics & Kinematics');
 });
 
-test('recordPublicEmailRegistration deduplicates emails cleanly', async () => {
-  const first = await recordPublicEmailRegistration({
-    email: 'team@example.org',
-    displayName: 'Team Member',
+test('deleteAccount removes the profile, session, and the user\'s feedback', async () => {
+  const { session } = startGuestSession('Temp User');
+  await submitFeedback({
+    userId: session.userId,
+    email: '',
+    category: 'UI / Workflow',
+    rating: 4,
+    message: 'Please add a dark/light toggle.',
+    appView: 'landing',
   });
-  const second = await recordPublicEmailRegistration({
-    email: 'TEAM@example.org',
-    displayName: 'Team Member',
+  await submitFeedback({
+    userId: 'someone_else',
+    email: '',
+    category: 'Bug Report',
+    rating: 3,
+    message: 'Unrelated feedback that must survive.',
+    appView: 'landing',
   });
-  assert.equal(first.ok, true);
-  assert.equal(second.ok, true);
-  assert.equal(listPublicEmailRegistrations().length, 1);
+
+  assert.deepEqual(await deleteAccount(session.userId), { ok: true });
+  assert.equal(getSession(), null);
+  assert.equal(getProfile(session.userId), null);
+  assert.deepEqual(listFeedback().map((f) => f.userId), ['someone_else']);
+});
+
+test('purgeLegacyLocalAccounts removes plaintext email lists and fake sessions from older versions', () => {
+  seedMemoryPlatformStoreForTests(
+    'axislab_email_registrations_v1',
+    JSON.stringify([{ email: 'old@example.com' }]),
+  );
+  seedMemoryPlatformStoreForTests('axislab_accounts_v2', JSON.stringify([{ email: 'old@example.com' }]));
+  seedMemoryPlatformStoreForTests(
+    'axislab_session_v1',
+    JSON.stringify({ userId: 'sb_pending_old@example.com', email: 'old@example.com', provider: 'supabase' }),
+  );
+
+  purgeLegacyLocalAccounts();
+
+  const stored = dumpMemoryPlatformStoreForTests();
+  assert.equal(stored.has('axislab_email_registrations_v1'), false);
+  assert.equal(stored.has('axislab_accounts_v2'), false);
+  assert.equal(getSession(), null);
+
+  // A current guest session is left alone
+  const { session } = startGuestSession();
+  purgeLegacyLocalAccounts();
+  assert.equal(getSession()?.userId, session.userId);
 });

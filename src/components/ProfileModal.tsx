@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { Check, LogOut, X } from 'lucide-react';
+import { Check, LogOut, Trash2, X } from 'lucide-react';
+import { AlertDialog } from '@astryxdesign/core/AlertDialog';
 import {
   AVATAR_COLOR_OPTIONS,
+  deleteAccount,
   getInitials,
   updateProfile,
   type AvatarColor,
@@ -24,6 +26,24 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   onProfileSaved,
   onSignOut,
 }) => {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const handleDelete = async () => {
+    if (!profile) return;
+    setDeleting(true);
+    setDeleteError(null);
+    const res = await deleteAccount(profile.userId);
+    setDeleting(false);
+    if (!res.ok) {
+      setDeleteError(res.error);
+      return;
+    }
+    setConfirmDelete(false);
+    onSignOut();
+    onClose();
+  };
   const [displayName, setDisplayName] = useState('');
   const [bio, setBio] = useState('');
   const [avatarColor, setAvatarColor] = useState<AvatarColor>('amber');
@@ -199,6 +219,14 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
               <LogOut className="h-3.5 w-3.5" />
               <span>Sign Out</span>
             </button>
+            <button
+              type="button"
+              onClick={() => setConfirmDelete(true)}
+              className="inline-flex items-center gap-1.5 rounded px-3 py-2 text-xs font-medium text-red-400 hover:bg-red-500/15 cursor-pointer"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <span>Delete account</span>
+            </button>
 
             <div className="flex items-center gap-2">
               <button
@@ -219,6 +247,23 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
           </div>
         </form>
       </div>
+
+      <AlertDialog
+        isOpen={confirmDelete}
+        onOpenChange={(isOpen) => !deleting && setConfirmDelete(isOpen)}
+        title="Delete your account?"
+        description={
+          deleteError
+            ? `Deletion failed: ${deleteError}`
+            : profile.userId.startsWith('guest_')
+              ? 'This clears your guest profile and feedback from this browser. It cannot be undone.'
+              : 'This permanently deletes your account, profile, and saved demonstrations, and anonymizes any feedback you sent. It cannot be undone.'
+        }
+        actionLabel="Delete permanently"
+        actionVariant="destructive"
+        isActionLoading={deleting}
+        onAction={handleDelete}
+      />
     </div>
   );
 };

@@ -1,9 +1,16 @@
 import React, { useState } from 'react';
-import { X } from 'lucide-react';
+import { Banner } from '@astryxdesign/core/Banner';
+import { Button } from '@astryxdesign/core/Button';
+import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog';
+import { Divider } from '@astryxdesign/core/Divider';
+import { VStack } from '@astryxdesign/core/Stack';
+import { Text } from '@astryxdesign/core/Text';
+import { TextInput } from '@astryxdesign/core/TextInput';
 import {
-  isSupabaseConfigured,
-  registerUserWithEmail,
-  signInUserWithEmail,
+  getAuthMode,
+  sendEmailSignInLink,
+  signInWithGoogle,
+  startGuestSession,
   type UserProfile,
   type UserSession,
 } from '../data/platformStore';
@@ -11,172 +18,150 @@ import {
 interface AuthModalProps {
   open: boolean;
   onClose: () => void;
-  onAuthSuccess: (
-    session: UserSession,
-    profile: UserProfile,
-    verificationEmailSent: boolean,
-  ) => void;
+  /** Called for guest sessions; cloud sessions arrive via the Supabase auth listener. */
+  onAuthSuccess: (session: UserSession, profile: UserProfile) => void;
 }
 
-export const AuthModal: React.FC<AuthModalProps> = ({
-  open,
-  onClose,
-  onAuthSuccess,
-}) => {
-  const [tab, setTab] = useState<'register' | 'signin'>('register');
+/** Google "G" mark for the sign-in button (per Google's sign-in branding guidelines). */
+export const GoogleMark: React.FC = () => (
+  <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true">
+    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+  </svg>
+);
+
+export const AuthModal: React.FC<AuthModalProps> = ({ open, onClose, onAuthSuccess }) => {
+  const mode = getAuthMode();
   const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const [busy, setBusy] = useState<'email' | 'google' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [linkSentTo, setLinkSentTo] = useState<string | null>(null);
 
-  if (!open) return null;
+  const close = () => {
+    setError(null);
+    setLinkSentTo(null);
+    onClose();
+  };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleEmail = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    setSubmitting(true);
+    setBusy('email');
     try {
-      if (tab === 'register') {
-        const res = await registerUserWithEmail({
-          email,
-          displayName,
-        });
-        if (!res.ok) {
-          setError(res.error);
-          return;
-        }
-        onAuthSuccess(res.session, res.profile, res.verificationEmailSent);
-        onClose();
-      } else {
-        const res = await signInUserWithEmail({ email });
-        if (!res.ok) {
-          setError(res.error);
-          return;
-        }
-        onAuthSuccess(res.session, res.profile, res.verificationEmailSent);
-        onClose();
-      }
+      const res = await sendEmailSignInLink({ email, displayName });
+      if (res.ok) setLinkSentTo(email.trim().toLowerCase());
+      else setError(res.error);
     } finally {
-      setSubmitting(false);
+      setBusy(null);
     }
   };
 
+  const handleGoogle = async () => {
+    setError(null);
+    setBusy('google');
+    const res = await signInWithGoogle();
+    // On success the browser navigates to Google; only failures return here
+    if (!res.ok) {
+      setError(res.error);
+      setBusy(null);
+    }
+  };
+
+  const handleGuest = (e: React.FormEvent) => {
+    e.preventDefault();
+    const { session, profile } = startGuestSession(displayName);
+    onAuthSuccess(session, profile);
+    close();
+  };
+
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="AxisLab 6 Account Registration and Sign In"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4"
-    >
-      <div className="w-full max-w-md rounded-lg border border-white/15 bg-[#141820] p-5 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-white/10 pb-3">
-          <h2 className="text-sm font-semibold text-slate-100">
-            AxisLab 6 Registration
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close Account Dialog"
-            className="rounded p-1 text-slate-400 hover:bg-white/10 hover:text-white cursor-pointer"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
+    <Dialog isOpen={open} onOpenChange={(isOpen) => !isOpen && close()} width={420}>
+      <DialogHeader
+        title={mode === 'cloud' ? 'Sign in to AxisLab' : 'Continue as a guest'}
+        subtitle={
+          mode === 'cloud'
+            ? 'Save demonstrations, policies, and preferences across devices.'
+            : 'Accounts are not connected on this deployment.'
+        }
+      />
+      <VStack gap={4} padding={4}>
+        {error && <Banner status="error" title="Sign-in problem" description={error} />}
 
-        <form onSubmit={handleSubmit} className="mt-4 space-y-3.5 text-xs" noValidate>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1 rounded bg-[#0d1015] p-1 border border-white/10">
-              <button
-                type="button"
-                onClick={() => {
-                  setTab('register');
-                  setError(null);
-                }}
-                className={`rounded px-3 py-1 text-xs font-medium cursor-pointer ${
-                  tab === 'register'
-                    ? 'bg-amber-500 text-slate-950'
-                    : 'text-slate-300 hover:text-white'
-                }`}
-              >
-                Register
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setTab('signin');
-                  setError(null);
-                }}
-                className={`rounded px-3 py-1 text-xs font-medium cursor-pointer ${
-                  tab === 'signin'
-                    ? 'bg-amber-500 text-slate-950'
-                    : 'text-slate-300 hover:text-white'
-                }`}
-              >
-                Sign In
-              </button>
-            </div>
-            <span className="text-[11px] text-slate-400">
-              {isSupabaseConfigured() ? 'Supabase Auth' : 'Public Email Registry'}
-            </span>
-          </div>
+        {mode === 'cloud' && linkSentTo && (
+          <Banner
+            status="success"
+            title="Check your inbox"
+            description={`We sent a sign-in link to ${linkSentTo}. Open it on this device to finish; you can close this window.`}
+          />
+        )}
 
-          <label className="block space-y-1">
-            <span className="block font-medium text-slate-300">Email Address</span>
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              className="w-full rounded border border-white/15 bg-[#0d1015] px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
+        {mode === 'cloud' && !linkSentTo && (
+          <>
+            <Button
+              label="Continue with Google"
+              variant="secondary"
+              icon={<GoogleMark />}
+              width="100%"
+              isLoading={busy === 'google'}
+              isDisabled={busy !== null}
+              onClick={handleGoogle}
             />
-          </label>
+            <Divider label="or use email" />
+            <form onSubmit={handleEmail}>
+              <VStack gap={3}>
+                <TextInput
+                  label="Email"
+                  type="email"
+                  value={email}
+                  onChange={setEmail}
+                  placeholder="you@lab.org"
+                  isRequired
+                  width="100%"
+                />
+                <TextInput
+                  label="Display name (optional, new accounts)"
+                  value={displayName}
+                  onChange={setDisplayName}
+                  placeholder="e.g. Ada Lovelace"
+                  width="100%"
+                />
+                <Button
+                  type="submit"
+                  label="Email me a sign-in link"
+                  variant="primary"
+                  width="100%"
+                  isLoading={busy === 'email'}
+                  isDisabled={busy !== null || email.trim() === ''}
+                />
+              </VStack>
+            </form>
+          </>
+        )}
 
-          {tab === 'register' && (
-            <label className="block space-y-1">
-              <span className="block font-medium text-slate-300">Display Name</span>
-              <input
-                type="text"
-                required
+        {mode === 'guest' && (
+          <form onSubmit={handleGuest}>
+            <VStack gap={3}>
+              <TextInput
+                label="Display name (optional)"
                 value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="Alex Rivera"
-                className="w-full rounded border border-white/15 bg-[#0d1015] px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
+                onChange={setDisplayName}
+                placeholder="Guest"
+                width="100%"
               />
-            </label>
-          )}
+              <Button type="submit" label="Continue as guest" variant="primary" width="100%" />
+            </VStack>
+          </form>
+        )}
 
-          {error && (
-            <div
-              role="alert"
-              className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300"
-            >
-              {error}
-            </div>
-          )}
-
-          <div className="flex items-center justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded border border-white/10 bg-[#1a202b] px-4 py-2 text-xs font-medium text-slate-200 hover:bg-[#232b3a] cursor-pointer"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={submitting}
-              className="rounded bg-amber-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-amber-400 disabled:opacity-50 cursor-pointer"
-            >
-              {submitting
-                ? 'Saving...'
-                : tab === 'register'
-                  ? 'Register'
-                  : 'Sign In'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        <Text type="supporting" color="secondary">
+          {mode === 'cloud'
+            ? 'No passwords. Your email is kept only by our sign-in provider and is never shared or shown to others. Profiles and saved work are private to you, and you can delete your account and data at any time from your profile.'
+            : 'Guest mode collects no email. Your profile and work stay in this browser only; clear it any time from your profile.'}
+        </Text>
+      </VStack>
+    </Dialog>
   );
 };
